@@ -5,6 +5,14 @@
   "description": "Claude Code as a Pi model provider — an in-process Pi extension on the Claude Agent SDK",
   "type": "module",
   "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
   "engines": {
     "node": ">=22.18"
   },
