@@ -34,19 +34,39 @@ test("registers the pi-with-claude provider with the settled roster", () => {
   }
 });
 
-test("stub stream pushes start..done and resolves the result", async () => {
-  const p = captured();
-  const model = { id: p.config.models[0].id, api: "pi-with-claude", provider: p.id };
-  const stream = p.config.streamSimple(model, {
-    systemPrompt: "You are a test.",
-    messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
-  });
-  const events: string[] = [];
-  for await (const ev of stream) events.push(ev.type);
-  const message = await stream.result();
-  assert.equal(events[0], "start");
-  assert.ok(events.includes("text_delta"));
-  assert.equal(events[events.length - 1], "done");
-  assert.equal(message.stopReason, "stop");
-  assert.ok(message.content[0].text.length > 0);
+test("projectMessages maps Pi shapes to the neutral schema", async () => {
+  const { projectMessages } = await import("../src/projection.ts");
+  const projected = projectMessages([
+    { role: "user", content: "hi", timestamp: 1 },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "what is this?" },
+        { type: "image", data: "AAAA", mimeType: "image/png" },
+      ],
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "add",
+      content: [{ type: "text", text: "5" }],
+      isError: false,
+      timestamp: 3,
+    },
+  ]);
+  assert.deepEqual(projected, [
+    { role: "user", blocks: [{ type: "text", text: "hi" }] },
+    {
+      role: "user",
+      blocks: [
+        { type: "text", text: "what is this?" },
+        { type: "image", media_type: "image/png", data: "AAAA" },
+      ],
+    },
+    {
+      role: "user",
+      blocks: [{ type: "tool_result", call_id: "t1", content: [{ type: "text", text: "5" }], is_error: false }],
+    },
+  ]);
 });

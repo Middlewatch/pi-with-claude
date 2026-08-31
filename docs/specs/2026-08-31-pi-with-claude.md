@@ -115,7 +115,7 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
 - [x] S1 Scaffold + gate skeleton: repo, README thesis and non-goals,
       MIT, verify.sh green over a provider stub, fake claude and smoke
       harness copied, SDK pinned with vet record, this spec copied in.
-- [ ] S2 Walking skeleton: one text turn streams through real Pi against
+- [x] S2 Walking skeleton: one text turn streams through real Pi against
       the fake — open, delta, stop, usage. (after S1)
 - [ ] S3 Mirror, diff, honest-restart taxonomy, and tool inversion:
       pause/resume, deny-as-data, handler cancellation. (after S2)
