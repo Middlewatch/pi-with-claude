@@ -126,7 +126,7 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
 - [x] S6 Reopen paths: model/effort/tool-set switches, accounts menu
       with CLAUDE_CONFIG_DIR selection and paused-tool-call refusal.
       (after S3)
-- [ ] S7 Images and folding: image blocks down the wire, ADR 0001
+- [x] S7 Images and folding: image blocks down the wire, ADR 0001
       no-op verified against a folding extension. (after S3)
 - [ ] S8 Parity demo + paid characterization + cutover; then the
       owner-gated npm publish after a public-release sweep. (after

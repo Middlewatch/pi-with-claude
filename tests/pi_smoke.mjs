@@ -251,6 +251,94 @@ if (phase === "--steering") {
   process.exit(0);
 }
 
+if (phase === "--fold") {
+  // A folding extension (context-fold) rewrites absorbed history IN
+  // PLACE — a stale tool_result's content and a thinking block's text
+  // become short digests — and the first fold can land while a tool
+  // call is in flight. The stateful CLI keeps the originals as the
+  // model's lived context and can never be reseeded, so the masked
+  // copies must diff as already-seen history: the paused turn resumes
+  // on the live session and nothing fresh-starts or reopens (ADR 0001;
+  // regression for claude-go's 2026-08-22 mid-flight fold crash).
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "add 2 and 3", timestamp: Date.now() }],
+  };
+  const round = async (label) => {
+    const pause = await turnOf(cfg, model, ctx);
+    if (pause.stopReason !== "toolUse") fail(`fold ${label} pause stopReason ${pause.stopReason}: ${pause.errorMessage ?? ""}`);
+    const call = pause.content.find((c) => c.type === "toolCall");
+    return { pause, call };
+  };
+  const r1 = await round("round 1");
+  ctx.messages.push(r1.pause, {
+    role: "toolResult", toolCallId: r1.call.id, toolName: r1.call.name,
+    content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now(),
+  });
+  const d1 = await turnOf(cfg, model, ctx);
+  if (d1.stopReason !== "stop") fail(`fold round 1 resume stopReason ${d1.stopReason}: ${d1.errorMessage ?? ""}`);
+
+  ctx.messages.push(d1, { role: "user", content: "add 4 and 1", timestamp: Date.now() });
+  const r2 = await round("round 2");
+
+  // The fold lands here, mid-flight: mask round 1's tool result and
+  // every absorbed thinking text — exactly the two block kinds the fold
+  // ladder masks, digests in place of content, structure untouched.
+  const t1 = ctx.messages.findIndex((m) => m.role === "toolResult");
+  ctx.messages[t1] = { ...ctx.messages[t1], content: [{ type: "text", text: "{#ab12 FOLDED} add tool result" }] };
+  for (const m of [r1.pause, d1]) {
+    for (const b of m.content) if (b.type === "thinking" && b.thinking) b.thinking = "{#ab13 FOLDED}";
+  }
+  ctx.messages.push(r2.pause, {
+    role: "toolResult", toolCallId: r2.call.id, toolName: r2.call.name,
+    content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now(),
+  });
+  const d2 = await turnOf(cfg, model, ctx);
+  if (d2.stopReason !== "stop") fail(`fold mid-flight resume stopReason ${d2.stopReason}: ${d2.errorMessage ?? ""}`);
+
+  // Between turns the same masking must pass equally unnoticed.
+  const t2 = ctx.messages.map((m) => m.role).lastIndexOf("toolResult");
+  ctx.messages[t2] = { ...ctx.messages[t2], content: [{ type: "text", text: "{#ab14 FOLDED} add tool result" }] };
+  ctx.messages.push(d2, { role: "user", content: "add 6 and 2", timestamp: Date.now() });
+  const r3 = await round("round 3");
+  ctx.messages.push(r3.pause, {
+    role: "toolResult", toolCallId: r3.call.id, toolName: r3.call.name,
+    content: [{ type: "text", text: "8" }], isError: false, timestamp: Date.now(),
+  });
+  const d3 = await turnOf(cfg, model, ctx);
+  if (d3.stopReason !== "stop") fail(`fold round 3 resume stopReason ${d3.stopReason}: ${d3.errorMessage ?? ""}`);
+  console.log("pi_smoke fold: OK");
+  process.exit(0);
+}
+
+if (phase === "--image") {
+  // A Pi image block must reach the wire as an Anthropic base64 source
+  // block, and the echoed history must still prefix-match next turn.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    messages: [{
+      role: "user",
+      content: [
+        { type: "text", text: "what is this?" },
+        { type: "image", data: "iVBORw0KGgoAAAANSUhEUg", mimeType: "image/png" },
+      ],
+      timestamp: Date.now(),
+    }],
+  };
+  const m1 = await turnOf(cfg, model, ctx);
+  if (m1.stopReason !== "stop") fail(`image turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  ctx.messages.push(m1, { role: "user", content: "thanks", timestamp: Date.now() });
+  const m2 = await turnOf(cfg, model, ctx);
+  if (m2.stopReason !== "stop") fail(`image turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  console.log("pi_smoke image: OK");
+  process.exit(0);
+}
+
 if (phase === "--swap") {
   // A model swap must reopen the session with the new model pinned —
   // never keep streaming on the old one. The parent asserts the trace
@@ -639,6 +727,35 @@ for (const [flag, fixture] of [
   if (!dirs.at(-1)?.endsWith("account-b")) {
     fail(`held switch never reached the child: CLAUDE_CONFIG_DIR ${dirs.join(",")}`);
   }
+}
+
+{
+  const { trace } = runStubPhase("--fold");
+  for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
+    if (count(trace, pattern) !== 0) fail(`fold phase took a ${label} — in-place masked history read as a rewrite`);
+  }
+  if (count(trace, /turn sent:/g) !== 3 || count(trace, /turn resumed:/g) !== 3) {
+    fail(
+      `fold phase: ${count(trace, /turn sent:/g)} sent / ${count(trace, /turn resumed:/g)} resumed, want 3/3`,
+    );
+  }
+}
+{
+  const { trace, wire } = runStubPhase("--image");
+  const content = wire.filter((o) => o.type === "user").flatMap((o) => o.message?.content ?? []);
+  const img = content.find((c) => c?.type === "image");
+  if (
+    !img ||
+    img.source?.type !== "base64" ||
+    img.source?.media_type !== "image/png" ||
+    img.source?.data !== "iVBORw0KGgoAAAANSUhEUg"
+  ) {
+    fail(`image never reached the wire as a base64 source block: ${JSON.stringify(content).slice(0, 300)}`);
+  }
+  for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
+    if (count(trace, pattern) !== 0) fail(`image phase took a ${label} — image history mismatched the mirror`);
+  }
+  if (count(trace, /turn sent:/g) !== 2) fail(`image phase sent ${count(trace, /turn sent:/g)} turn(s), want 2`);
 }
 
 console.log("pi_smoke: OK — all phases green");
