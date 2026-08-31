@@ -119,7 +119,7 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
       the fake — open, delta, stop, usage. (after S1)
 - [x] S3 Mirror, diff, honest-restart taxonomy, and tool inversion:
       pause/resume, deny-as-data, handler cancellation. (after S2)
-- [ ] S4 Occupancy and cost: getContextUsage translation, iterations
+- [x] S4 Occupancy and cost: getContextUsage translation, iterations
       split, Pi compaction thresholds fed truthfully. (after S3)
 - [ ] S5 Interrupt and steering: interrupt mapping, steering withheld
       in-flight and delivered next turn. (after S3)

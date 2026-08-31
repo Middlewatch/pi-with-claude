@@ -29,6 +29,27 @@ function fail(msg) {
   process.exit(1);
 }
 
+// The context occupancy fake_claude.py answers get_context_usage with.
+// The fixtures' per-turn counters are deliberately NOT this number (the
+// default fixture reports 879 input over one request, the tool fixture
+// 1998+ over two), so an extension that relayed them would fail here.
+// Pi decides occupancy from two places in one usage object — compaction
+// thresholds on totalTokens, pi-ai's silent-overflow on input+cacheRead
+// vs contextWindow — and a disagreement is a live failure.
+const FAKE_CONTEXT_TOKENS = 869;
+
+function checkOccupancy(msg, where) {
+  const u = msg.usage ?? {};
+  if (u.totalTokens !== FAKE_CONTEXT_TOKENS)
+    fail(`${where}: usage.totalTokens ${u.totalTokens}, want the CLI's own ${FAKE_CONTEXT_TOKENS}`);
+  if (u.input + u.cacheRead !== FAKE_CONTEXT_TOKENS)
+    fail(
+      `${where}: usage.input+cacheRead ${u.input}+${u.cacheRead}, want ${FAKE_CONTEXT_TOKENS} — ` +
+        "Pi reads this sum as occupancy",
+    );
+  if (!(u.cost?.total > 0)) fail(`${where}: cost.total ${u.cost?.total} — the CLI's estimate was dropped (I7)`);
+}
+
 // ---------------------------------------------------------------------
 // Stub-API phases (run as child processes; fresh module state each).
 
@@ -74,6 +95,7 @@ if (phase === "--seeded") {
   };
   const m1 = await turnOf(cfg, model, seeded);
   if (m1.stopReason !== "stop") fail(`seeded turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  checkOccupancy(m1, "seeded turn 1");
   seeded.messages.push(m1, { role: "user", content: "and one more", timestamp: Date.now() });
   const m2 = await turnOf(cfg, model, seeded);
   if (m2.stopReason !== "stop") fail(`seeded turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
@@ -132,6 +154,9 @@ async function toolLoop({ isError, wantThinking }) {
   });
   const done = await turnOf(cfg, model, ctx);
   if (done.stopReason !== "stop") fail(`resumed turn stopReason ${done.stopReason}: ${done.errorMessage ?? ""}`);
+  // The tool fixture's result sums two requests; the occupancy Pi sees
+  // must still be the CLI's own answer.
+  checkOccupancy(done, "resumed tool turn");
   return call;
 }
 
@@ -268,6 +293,9 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
   if (deltas < 3) fail(`only ${deltas} content_block_delta frames in trace — streaming path broken`);
   if (!/frame: result success/.test(trace)) fail(`no successful result frame in trace:\n${trace.slice(0, 800)}`);
   if (count(trace, /turn sent:/g) !== 1) fail("expected exactly one turn sent");
+  if (!trace.includes(`occupancy: ${FAKE_CONTEXT_TOKENS} (cli)`)) {
+    fail(`occupancy through real pi is not the CLI's own answer:\n${trace.slice(-400)}`);
+  }
   console.log("pi_smoke text: OK — one text turn through real pi");
 }
 

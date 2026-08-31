@@ -99,6 +99,10 @@ class Session {
   // History deliberately never sent (resumed sessions, fresh-start
   // trims): subtracted from every diff so it is not re-flagged as new.
   dropped = new Map<string, number>();
+  // The CLI's cost estimate is cumulative per session; per-turn cost is
+  // the delta against this watermark (I7: an estimate, surfaced as the
+  // CLI's own).
+  lastCostUsd = 0;
   inFlight = false; // a model turn is paused on Pi-run tool calls
   // Parked tool calls: handlers blocking on promises a later Pi turn
   // resolves. Keyed by the model's tool_use id once known; a call the
@@ -648,25 +652,35 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           assertInitSurface(frame.tools, expectedInitTools);
         } else if (frame.type === "result") {
           finalizeTurn(frame.subtype === "success" ? "end_turn" : "error");
-          if (frame.usage) {
-            // Pi reads context occupancy out of this object in TWO
-            // places (compaction threshold: totalTokens; pi-ai
-            // silent-overflow: input + cacheRead), and both must agree
-            // with the CLI's own accounting. The per-turn fields are
-            // COST counters aggregating every request in a tool-loop
-            // turn, so one occupancy number is published in every
-            // field Pi reads. S4 replaces this aggregate estimate with
-            // the CLI's own getContextUsage answer.
-            const occupancy =
-              (frame.usage.input_tokens ?? 0) +
+          // Pi reads context occupancy out of the usage object in TWO
+          // places (compaction threshold: totalTokens; pi-ai
+          // silent-overflow: input + cacheRead), and both must agree
+          // with the CLI's own accounting. The result's per-turn token
+          // fields are COST counters: they aggregate every request in a
+          // tool-loop turn (iterations[] carries the split), so relayed
+          // verbatim they compact a nearly-empty session. So ONE
+          // occupancy number goes into every field Pi reads: the CLI's
+          // own getContextUsage answer, with the aggregate as the
+          // estimate of last resort. Booked as cache read because that
+          // is what it is — the prompt lives in the CLI's session, not
+          // in tokens Pi sent this turn.
+          const cu = await s.q.getContextUsage?.().catch(() => null);
+          const aggregate = frame.usage
+            ? (frame.usage.input_tokens ?? 0) +
               (frame.usage.output_tokens ?? 0) +
               (frame.usage.cache_read_input_tokens ?? 0) +
-              (frame.usage.cache_creation_input_tokens ?? 0);
-            output.usage.input = 0;
-            output.usage.cacheRead = occupancy;
-            output.usage.cacheWrite = 0;
-            output.usage.output = frame.usage.output_tokens ?? 0;
-            output.usage.totalTokens = occupancy;
+              (frame.usage.cache_creation_input_tokens ?? 0)
+            : 0;
+          const occupancy = cu?.totalTokens || aggregate;
+          debug("occupancy:", occupancy, cu?.totalTokens ? "(cli)" : "(aggregate)");
+          output.usage.input = 0;
+          output.usage.cacheRead = occupancy;
+          output.usage.cacheWrite = 0;
+          output.usage.output = frame.usage?.output_tokens ?? 0;
+          output.usage.totalTokens = occupancy;
+          if (typeof frame.total_cost_usd === "number") {
+            output.usage.cost.total = Math.max(0, frame.total_cost_usd - s.lastCostUsd);
+            s.lastCostUsd = frame.total_cost_usd;
           }
           if (output.stopReason === "error") output.errorMessage = `pi-with-claude: turn ended ${frame.subtype}`;
           break;
