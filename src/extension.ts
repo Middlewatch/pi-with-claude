@@ -360,6 +360,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
     };
     let s: Session | null = null;
     let ownsBusy = false;
+    let onAbort: (() => void) | null = null;
     try {
       stream.push({ type: "start", partial: output });
 
@@ -418,6 +419,15 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       s.busy = true;
       ownsBusy = true;
       s.ref();
+
+      // Esc maps to the CLI's control-channel interrupt — never a kill;
+      // the interrupted turn surfaces as its error_during_execution
+      // result below and is mapped back to Pi's aborted stop.
+      onAbort = () => {
+        debug("interrupt requested");
+        session?.q.interrupt?.().catch(() => {});
+      };
+      options?.signal?.addEventListener("abort", onAbort, { once: true });
 
       const candidate = projectMessages(context.messages);
       let sendable: Json[] = [];
@@ -581,18 +591,24 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // authoritative message Pi stores and re-projects next turn.
       const finalizeTurn = (reason: string) => {
         closeBlock();
-        // Recover reasoning the CLI streamed but reported empty in its
-        // final frames (characterized: assistant frames can carry a
-        // thinking block with no text while the deltas carried it). A
-        // turn that never streamed thinking stays honestly empty —
-        // nothing is invented.
-        const streamedThinking = output.content.filter((c: Json) => c.type === "thinking");
-        output.content = sdkContentToPi(turnBlocks);
-        let ti = 0;
-        for (const c of output.content) {
-          if (c.type !== "thinking") continue;
-          const st = streamedThinking[ti++];
-          if (!c.thinking && st?.thinking) c.thinking = st.thinking;
+        if (reason === "interrupted" || turnBlocks.length === 0) {
+          // An interrupted turn's trailing block never gets its
+          // assistant frame; the delta-built content IS the partial
+          // message the model lived, so it survives as-is.
+        } else {
+          // Recover reasoning the CLI streamed but reported empty in
+          // its final frames (characterized: assistant frames can carry
+          // a thinking block with no text while the deltas carried it).
+          // A turn that never streamed thinking stays honestly empty —
+          // nothing is invented.
+          const streamedThinking = output.content.filter((c: Json) => c.type === "thinking");
+          output.content = sdkContentToPi(turnBlocks);
+          let ti = 0;
+          for (const c of output.content) {
+            if (c.type !== "thinking") continue;
+            const st = streamedThinking[ti++];
+            if (!c.thinking && st?.thinking) c.thinking = st.thinking;
+          }
         }
         s!.inFlight = reason === "tool_calls";
         s!.noted.push(...sendable, { role: "assistant", blocks: assistantBlocks(output.content) });
@@ -651,7 +667,16 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         } else if (frame.type === "system" && frame.subtype === "init") {
           assertInitSurface(frame.tools, expectedInitTools);
         } else if (frame.type === "result") {
-          finalizeTurn(frame.subtype === "success" ? "end_turn" : "error");
+          // An interrupted turn comes back as error_during_execution,
+          // not a distinct subtype (spike-characterized); it is Pi's
+          // aborted stop only when this host actually interrupted.
+          finalizeTurn(
+            frame.subtype === "success"
+              ? "end_turn"
+              : frame.subtype === "error_during_execution" && options?.signal?.aborted
+                ? "interrupted"
+                : "error",
+          );
           // Pi reads context occupancy out of the usage object in TWO
           // places (compaction threshold: totalTokens; pi-ai
           // silent-overflow: input + cacheRead), and both must agree
@@ -714,6 +739,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
     } finally {
+      if (onAbort) options?.signal?.removeEventListener("abort", onAbort);
       if (s && ownsBusy) {
         s.busy = false;
         s.unref();

@@ -186,6 +186,67 @@ if (phase === "--thinkless") {
   process.exit(0);
 }
 
+if (phase === "--interrupt") {
+  // FAKE_CLAUDE_HOLD_AFTER parks the fake mid-stream until the
+  // interrupt control request arrives; the turn must come back as Pi's
+  // aborted stop with the streamed partial content intact.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const controller = new AbortController();
+  const stream = cfg.streamSimple(
+    model,
+    { systemPrompt: "You are a test.", messages: [{ role: "user", content: "count forever", timestamp: Date.now() }] },
+    { signal: controller.signal },
+  );
+  for await (const ev of stream) {
+    if (ev.type === "thinking_delta" || ev.type === "text_delta") controller.abort();
+  }
+  const m = await stream.result();
+  if (m.stopReason !== "aborted") fail(`interrupted turn stopReason ${m.stopReason}: ${m.errorMessage ?? ""}`);
+  if (!m.content.length) fail("interrupted turn lost its streamed partial content");
+  console.log("pi_smoke interrupt: OK");
+  process.exit(0);
+}
+
+if (phase === "--steering") {
+  // Steering typed while tools run: alone it is refused with the
+  // holding message; alongside completions it is withheld from the
+  // resumed flight and delivered on the next ordinary turn.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "add 2 and 3", timestamp: Date.now() }],
+  };
+  const pause = await turnOf(cfg, model, ctx);
+  if (pause.stopReason !== "toolUse") fail(`steering pause stopReason ${pause.stopReason}: ${pause.errorMessage ?? ""}`);
+  const call = pause.content.find((c) => c.type === "toolCall");
+
+  ctx.messages.push(pause, { role: "user", content: "actually, wait", timestamp: Date.now() });
+  const refused = await turnOf(cfg, model, ctx);
+  if (refused.stopReason !== "error") fail(`steering-only turn stopReason ${refused.stopReason}, want error`);
+  if (!(refused.errorMessage ?? "").includes("only its results")) {
+    fail(`steering-only refusal does not explain itself: ${refused.errorMessage}`);
+  }
+
+  ctx.messages.push({
+    role: "toolResult", toolCallId: call.id, toolName: call.name,
+    content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now(),
+  });
+  const done = await turnOf(cfg, model, ctx);
+  if (done.stopReason !== "stop") fail(`resumed turn stopReason ${done.stopReason}: ${done.errorMessage ?? ""}`);
+
+  ctx.messages.push(done);
+  // The withheld text goes out on its own turn now. (The fake replays
+  // the tool fixture per user frame, so this delivery turn pauses on a
+  // fresh tool call — toolUse IS the proof the text was sent.)
+  const delivered = await turnOf(cfg, model, ctx);
+  if (delivered.stopReason !== "toolUse") fail(`steering delivery turn stopReason ${delivered.stopReason}: ${delivered.errorMessage ?? ""}`);
+  console.log("pi_smoke steering: OK");
+  process.exit(0);
+}
+
 if (phase !== undefined) fail(`unknown phase ${phase}`);
 
 // ---------------------------------------------------------------------
@@ -348,6 +409,26 @@ for (const [flag, fixture] of [
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
     if (count(trace, pattern) !== 0) fail(`${flag} took a ${label} — the mirror mismatched across the tool loop`);
   }
+}
+{
+  // Park after 8 replayed frames: init, status, message_start, block
+  // start, and two thinking deltas are through, so the abort lands
+  // mid-stream with partial content to preserve.
+  const trace = runStubPhase("--interrupt", { FAKE_CLAUDE_HOLD_AFTER: "8" });
+  if (count(trace, /interrupt requested/g) !== 1) fail("interrupt phase never requested the interrupt");
+  if (!/frame: result error_during_execution/.test(trace)) fail("interrupt phase saw no error_during_execution result");
+  if (count(trace, /reopening session/g) !== 0) fail("interrupt phase reopened — an interrupt must not cost the session");
+}
+{
+  const trace = runStubPhase("--steering");
+  // Two withholds: the steering-only refusal filters it first, then
+  // the completion turn withholds it from the resumed flight.
+  if (count(trace, /withheld 1 steering message\(s\)/g) !== 2) {
+    fail(`steering phase did not withhold the in-flight text twice:\n${trace.slice(-600)}`);
+  }
+  if (count(trace, /turn sent:/g) !== 2) fail("steering phase: want exactly 2 sent turns (opening + delivery)");
+  if (count(trace, /turn resumed:/g) !== 1) fail("steering phase: want exactly 1 resumed turn");
+  if (count(trace, /reopening session/g) !== 0) fail("steering phase reopened — withheld steering must not restart");
 }
 
 console.log("pi_smoke: OK — all phases green");
