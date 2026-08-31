@@ -150,3 +150,15 @@ export function freshStart(candidate: Json[]): Json[] {
 }
 
 export const isUserContent = (m: Json) => m.blocks.some((b: Json) => b.type === "text" || b.type === "image");
+
+export const hasToolResult = (m: Json) => m.blocks.some((b: Json) => b.type === "tool_result");
+
+// Neutral tool descriptors: the session-identity signature (a drifted
+// set forces a reopen) and the shape the MCP server advertises.
+export function projectTools(tools: Json[] | undefined): Json[] {
+  return (tools ?? []).map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters ?? { type: "object" },
+  }));
+}

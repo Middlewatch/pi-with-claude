@@ -1,13 +1,18 @@
 #!/usr/bin/env node
-// The whole extension through REAL Pi, token-free: spawn `pi -p` with
-// the extension loaded, the provider selected, and discovery disabled;
-// the Agent SDK spawns tests/fake_claude.py in place of the real
-// `claude`. Assertions read what Pi prints, the extension's debug
-// trace, and the fake's stdin log (the wire witness).
+// The extension's gate smoke, token-free end to end.
 //
-// Ported from claude-go's tests/pi_smoke.mjs (which drove the extension
-// under a stubbed Pi API); this successor drives the installed `pi`
-// binary itself, per the spec's gate decision.
+// Two tiers in one file:
+//   - REAL-PI phases: spawn the installed `pi -p` with the extension
+//     loaded and the Agent SDK pointed at tests/fake_claude.py, then
+//     assert on Pi's output, the extension's debug trace, and the
+//     fake's stdin log (the wire witness).
+//   - STUB-API phases (child processes of this file, one per scenario
+//     for fresh module state): drive streamSimple directly under a
+//     stubbed Pi API to reach histories real `pi -p` cannot produce —
+//     seeded resumes, stale tool results, regression fixtures.
+//
+// Ported from claude-go's tests/pi_smoke.mjs; the stub-API scenarios
+// carry over, the real-pi tier is new with the SDK rebuild.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -15,17 +20,153 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const here = fileURLToPath(import.meta.url);
+const root = dirname(dirname(here));
+const phase = process.argv[2];
 
 function fail(msg) {
   console.error(`pi_smoke: FAIL — ${msg}`);
   process.exit(1);
 }
 
-// One `pi -p` run: returns { r, trace, wire } where trace is the
-// extension's debug log and wire is every JSON line the fake saw on
-// stdin (first line: its argv and environment).
-function piTurn(messages, { env = {}, extraArgs = [] } = {}) {
+// ---------------------------------------------------------------------
+// Stub-API phases (run as child processes; fresh module state each).
+
+async function loadProvider() {
+  const { default: register } = await import(new URL("../src/index.ts", import.meta.url));
+  let captured = null;
+  register({
+    registerProvider(id, config) {
+      captured = { id, config };
+    },
+    registerCommand() {},
+  });
+  if (!captured) fail("extension did not call registerProvider");
+  return captured;
+}
+
+async function turnOf(cfg, model, ctx, options) {
+  const s = cfg.streamSimple(model, ctx, options);
+  for await (const _ of s) { /* drain */ }
+  return await s.result();
+}
+
+if (phase === "--seeded") {
+  // Resumed-session scenario: fresh extension state, a context that
+  // already carries assistant history. The extension must fresh-start
+  // once — never restart per turn — and remember what it dropped.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const seeded = {
+    systemPrompt: "You are a test.",
+    messages: [
+      { role: "user", content: "an earlier question", timestamp: Date.now() - 60000 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "an earlier answer" }],
+        api: "pi-with-claude", provider: "pi-with-claude", model: model.id,
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: "stop", timestamp: Date.now() - 50000,
+      },
+      { role: "user", content: "a fresh question", timestamp: Date.now() },
+    ],
+  };
+  const m1 = await turnOf(cfg, model, seeded);
+  if (m1.stopReason !== "stop") fail(`seeded turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  seeded.messages.push(m1, { role: "user", content: "and one more", timestamp: Date.now() });
+  const m2 = await turnOf(cfg, model, seeded);
+  if (m2.stopReason !== "stop") fail(`seeded turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  console.log("pi_smoke seeded: OK");
+  process.exit(0);
+}
+
+if (phase === "--stale") {
+  // A tool_result answering a call whose turn already ended is stale:
+  // the honest restart runs, the trailing user text still goes out.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = { systemPrompt: "You are a test.", messages: [{ role: "user", content: "one", timestamp: Date.now() }] };
+  const m1 = await turnOf(cfg, model, ctx);
+  if (m1.stopReason !== "stop") fail(`stale turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  ctx.messages.push(
+    m1,
+    { role: "toolResult", toolCallId: "toolu_never_issued", toolName: "add",
+      content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now() },
+    { role: "user", content: "two", timestamp: Date.now() },
+  );
+  const m2 = await turnOf(cfg, model, ctx);
+  if (m2.stopReason !== "stop") fail(`stale turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  console.log("pi_smoke stale: OK");
+  process.exit(0);
+}
+
+// Shared by --deny / --empty-thinking / --thinkless: one tool loop with
+// the pause surfaced to the (stub) host and the completion resolving it.
+async function toolLoop({ isError, wantThinking }) {
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "add 2 and 3", timestamp: Date.now() }],
+  };
+  const pause = await turnOf(cfg, model, ctx);
+  if (pause.stopReason !== "toolUse") fail(`tool pause stopReason ${pause.stopReason}: ${pause.errorMessage ?? ""}`);
+  const call = pause.content.find((c) => c.type === "toolCall");
+  if (!call) fail("no toolCall block in the paused message");
+  if (call.name.startsWith("mcp__")) fail(`toolCall surfaced under wire name ${call.name} — Pi cannot execute it`);
+  const think = pause.content.find((c) => c.type === "thinking");
+  if (wantThinking !== undefined) {
+    if (!think) fail("fixture did not produce a thinking block");
+    if (wantThinking === "") {
+      if (think.thinking !== "") fail(`expected an empty thinking block, got ${JSON.stringify(think.thinking.slice(0, 60))}`);
+    } else if (!think.thinking.startsWith(wantThinking)) {
+      fail(`recovered thinking is not the streamed text: ${JSON.stringify(think.thinking.slice(0, 80))}`);
+    }
+  }
+  ctx.messages.push(pause, {
+    role: "toolResult", toolCallId: call.id, toolName: call.name,
+    content: [{ type: "text", text: isError ? "denied by host policy" : "5" }],
+    isError, timestamp: Date.now(),
+  });
+  const done = await turnOf(cfg, model, ctx);
+  if (done.stopReason !== "stop") fail(`resumed turn stopReason ${done.stopReason}: ${done.errorMessage ?? ""}`);
+  return call;
+}
+
+if (phase === "--deny") {
+  // Deny-as-data: an is_error completion resolves the parked handler
+  // and the turn continues to a normal stop — never a session error.
+  const call = await toolLoop({ isError: true });
+  console.log(`pi_smoke deny: OK — plain name ${JSON.stringify(call.name)}, denial flowed as data`);
+  process.exit(0);
+}
+
+if (phase === "--empty-thinking") {
+  // The fixture's final frames report the thinking block with no text,
+  // but the deltas carried it: the streamed reasoning must reach the
+  // host. Regression from claude-go (2026-08-10, opus at high).
+  await toolLoop({ isError: false, wantThinking: "The user wants me to use the add tool" });
+  console.log("pi_smoke empty-thinking: OK");
+  process.exit(0);
+}
+
+if (phase === "--thinkless") {
+  // No deltas ever carried the thinking text: nothing to recover, the
+  // block stays honestly empty, and the mirror still matches across
+  // the tool loop.
+  await toolLoop({ isError: false, wantThinking: "" });
+  console.log("pi_smoke thinkless: OK");
+  process.exit(0);
+}
+
+if (phase !== undefined) fail(`unknown phase ${phase}`);
+
+// ---------------------------------------------------------------------
+// Parent: real-pi phases, then the stub-API children.
+
+function piTurn(message, { env = {}, extraArgs = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pwc-smoke-"));
   const tracePath = join(dir, "trace.log");
   const wirePath = join(dir, "fake.log");
@@ -36,7 +177,7 @@ function piTurn(messages, { env = {}, extraArgs = [] } = {}) {
     "-e", join(root, "src", "index.ts"),
     "-ne", "-ns", "-np", "-nc", "--no-themes", "--no-session",
     ...extraArgs,
-    ...(Array.isArray(messages) ? messages : [messages]),
+    message,
   ];
   const r = spawnSync("pi", args, {
     encoding: "utf-8",
@@ -70,9 +211,36 @@ function piTurn(messages, { env = {}, extraArgs = [] } = {}) {
   return { r, trace, wire };
 }
 
-// --- S2 walking skeleton: one text turn — open, deltas, stop, usage.
+function runStubPhase(flag, env = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "pwc-phase-"));
+  const tracePath = join(dir, "trace.log");
+  const child = spawnSync(process.execPath, [here, flag], {
+    encoding: "utf-8",
+    timeout: 120000,
+    env: {
+      ...process.env,
+      PI_WITH_CLAUDE_CLAUDE: join(root, "tests", "fake_claude.py"),
+      PI_WITH_CLAUDE_DEBUG: tracePath,
+      ...env,
+    },
+  });
+  let trace = "";
+  try {
+    trace = readFileSync(tracePath, "utf-8");
+  } catch {}
+  rmSync(dir, { recursive: true, force: true });
+  if (child.status !== 0) {
+    fail(`${flag} phase exited ${child.status}: ${child.stderr?.slice(0, 500)} ${child.stdout?.slice(0, 300)}`);
+  }
+  return trace;
+}
+
+const count = (text, pattern) => (text.match(pattern) ?? []).length;
+
+// --- Real pi, one text turn: open, deltas, stop. -nt keeps Pi's
+// builtin tools out so this is the pure Pipe profile (tools []).
 {
-  const { r, trace, wire } = piTurn("hello from pi");
+  const { r, trace, wire } = piTurn("hello from pi", { extraArgs: ["-nt"] });
   if (r.status !== 0) fail(`pi exited ${r.status}: ${r.stderr?.slice(0, 600)} ${r.stdout?.slice(0, 400)}`);
   // The fixture's text block is "ok" (fixtures/turn-deltas.jsonl).
   if (!r.stdout.includes("ok")) fail(`fixture reply not in pi output: ${r.stdout.slice(0, 400)}`);
@@ -96,11 +264,62 @@ function piTurn(messages, { env = {}, extraArgs = [] } = {}) {
     fail(`initialize.systemPrompt is not Pi's prompt as a one-string array: ${JSON.stringify(sp)?.slice(0, 200)}`);
   }
 
-  // The turn actually streamed: deltas before the result.
-  const deltas = (trace.match(/frame: stream_event content_block_delta/g) ?? []).length;
+  const deltas = count(trace, /frame: stream_event content_block_delta/g);
   if (deltas < 3) fail(`only ${deltas} content_block_delta frames in trace — streaming path broken`);
   if (!/frame: result success/.test(trace)) fail(`no successful result frame in trace:\n${trace.slice(0, 800)}`);
-  if ((trace.match(/turn sent:/g) ?? []).length !== 1) fail("expected exactly one turn sent");
-
-  console.log("pi_smoke: OK — one text turn through real pi (open, deltas, stop)");
+  if (count(trace, /turn sent:/g) !== 1) fail("expected exactly one turn sent");
+  console.log("pi_smoke text: OK — one text turn through real pi");
 }
+
+// --- Real pi, tool inversion end to end: the scripted model calls the
+// proxy, the extension pauses, Pi executes its own registered tool, and
+// the completion resumes the same CLI turn.
+{
+  // -t add: exactly one registered tool, so the fixture's tools/list
+  // handshake and the model's tool_use both land on it.
+  const { r, trace, wire } = piTurn("add 2 and 3", {
+    extraArgs: ["-e", join(root, "tests", "tool_ext.ts"), "-t", "add"],
+  });
+  if (r.status !== 0) fail(`tool pi exited ${r.status}: ${r.stderr?.slice(0, 600)} ${r.stdout?.slice(0, 400)}`);
+  if (!r.stdout.includes("5")) fail(`final tool answer not in pi output: ${r.stdout.slice(0, 400)}`);
+  const init = wire.find((o) => o.type === "control_request" && o.request?.subtype === "initialize");
+  if (!init || JSON.stringify(init.request.sdkMcpServers) !== '["pi"]') {
+    fail(`initialize did not declare the in-process server: ${JSON.stringify(init?.request?.sdkMcpServers)}`);
+  }
+  if (count(trace, /tool pause: 1 call\(s\) parked/g) !== 1) fail(`no single tool pause in trace:\n${trace.slice(-800)}`);
+  if (count(trace, /resumed 1 tool call\(s\)/g) !== 1) fail(`no single tool resume in trace:\n${trace.slice(-800)}`);
+  if (count(trace, /reopening session/g) !== 0) fail("tool loop reopened the session — pause/resume regression");
+  console.log("pi_smoke tools: OK — inversion loop through real pi");
+}
+
+// --- Stub-API children.
+{
+  const trace = runStubPhase("--seeded");
+  if (count(trace, /fresh start:/g) !== 1) fail(`seeded phase fresh-started ${count(trace, /fresh start:/g)} time(s), want exactly 1`);
+  if (count(trace, /turn sent:/g) !== 2) fail(`seeded phase sent ${count(trace, /turn sent:/g)} turn(s), want 2`);
+  if (count(trace, /reopening session/g) !== 0) fail("seeded phase reopened — resume regression");
+}
+{
+  const trace = runStubPhase("--stale");
+  if (count(trace, /stale tool_result between turns: reopening session/g) !== 1) {
+    fail(`stale phase did not take the stale-restart path:\n${trace.slice(-800)}`);
+  }
+  if (count(trace, /fresh start:/g) !== 1) fail("stale phase must fresh-start exactly once");
+}
+{
+  const trace = runStubPhase("--deny");
+  if (count(trace, /tool pause: 1 call\(s\) parked/g) !== 1) fail("deny phase saw no tool pause");
+  if (count(trace, /resumed 1 tool call\(s\)/g) !== 1) fail("deny phase saw no resume");
+  if (count(trace, /reopening session/g) !== 0) fail("deny phase reopened — deny must flow as data");
+}
+for (const [flag, fixture] of [
+  ["--empty-thinking", "tool-call-turn-empty-thinking.jsonl"],
+  ["--thinkless", "tool-call-turn-thinkless.jsonl"],
+]) {
+  const trace = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture) });
+  for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
+    if (count(trace, pattern) !== 0) fail(`${flag} took a ${label} — the mirror mismatched across the tool loop`);
+  }
+}
+
+console.log("pi_smoke: OK — all phases green");

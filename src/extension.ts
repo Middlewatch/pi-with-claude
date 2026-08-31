@@ -24,12 +24,16 @@ import {
   assistantBlocks,
   diffNew,
   freshStart,
+  hasToolResult,
   isUserContent,
   keyOf,
+  MCP_SERVER,
   plainToolName,
   projectMessages,
+  projectTools,
   wireNames,
 } from "./projection.ts";
+import { makeToolServer, type ToolCallRequest } from "./tools.ts";
 
 type Json = any;
 
@@ -87,6 +91,7 @@ class Session {
   busy = false; // one streamSimple at a time: msgs/waiters are one shared FIFO
   modelId: string; // pinned at open; a swap forces a reopen
   effort: string; // pinned at open (argv-scoped); a change forces a reopen
+  toolsSig: string; // registered tool set, pinned by the MCP handshake; drift forces a reopen
   // The mirror: every neutral message the live session has absorbed, in
   // absorption order — accepted suffixes verbatim, then each turn's
   // assistant message as Pi will hand it back.
@@ -95,13 +100,20 @@ class Session {
   // trims): subtracted from every diff so it is not re-flagged as new.
   dropped = new Map<string, number>();
   inFlight = false; // a model turn is paused on Pi-run tool calls
+  // Parked tool calls: handlers blocking on promises a later Pi turn
+  // resolves. Keyed by the model's tool_use id once known; a call the
+  // CLI dispatched without its _meta id waits in parkedUnbound until
+  // the pause binds it to a block by name.
+  parkedById = new Map<string, ToolCallRequest>();
+  parkedUnbound: ToolCallRequest[] = [];
 
   private queue: Json[] = [];
   private wake: (() => void) | null = null;
 
-  constructor(cfg: { model: string; systemPrompt: string; effort: string }) {
+  constructor(cfg: { model: string; systemPrompt: string; effort: string; tools: Json[]; toolsSig: string }) {
     this.modelId = cfg.model;
     this.effort = cfg.effort;
+    this.toolsSig = cfg.toolsSig;
     const self = this;
     async function* prompt() {
       for (;;) {
@@ -147,6 +159,21 @@ class Session {
       },
     };
     if (cfg.effort) options.effort = cfg.effort;
+    if (cfg.tools.length > 0) {
+      options.mcpServers = {
+        [MCP_SERVER]: {
+          type: "sdk",
+          name: MCP_SERVER,
+          instance: makeToolServer(cfg.tools, (req) => {
+            if (req.toolUseId) this.parkedById.set(req.toolUseId, req);
+            else this.parkedUnbound.push(req);
+            // Wake the turn loop as a frame so the pause condition is
+            // re-checked the moment a handler parks.
+            this.deliver({ type: "__tool_parked", id: req.toolUseId, name: req.name });
+          }),
+        },
+      };
+    }
     if (process.env.PI_WITH_CLAUDE_CLAUDE) options.pathToClaudeCodeExecutable = process.env.PI_WITH_CLAUDE_CLAUDE;
     this.q = query({ prompt: prompt(), options });
     // The pump: every SDK message lands in one FIFO the current turn
@@ -195,8 +222,19 @@ class Session {
     return this.closed || (this.child !== null && this.child.exitCode !== null);
   }
 
+  // Cancel every parked handler so nothing hangs across a restart or
+  // close; the rejection surfaces to the CLI side, which this teardown
+  // is ending anyway.
+  cancelParked(reason: string) {
+    for (const req of this.parkedById.values()) req.reject(new Error(reason));
+    for (const req of this.parkedUnbound) req.reject(new Error(reason));
+    this.parkedById.clear();
+    this.parkedUnbound = [];
+  }
+
   close() {
     this.closed = true;
+    this.cancelParked("pi-with-claude: session closed with a tool call in flight");
     this.wake?.();
     this.wake = null;
     try {
@@ -325,17 +363,20 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // what this turn sends so observing extensions see the same
       // system prompt and messages. Observation only: a returned
       // replacement is not applied (I2, no rewriting on the way out).
+      const tools = context.tools ?? [];
+      const toolsSig = JSON.stringify(projectTools(tools));
       await options?.onPayload?.(
-        { system: context.systemPrompt ?? "", messages: context.messages ?? [], model: model.id, tools: [] },
+        { system: context.systemPrompt ?? "", messages: context.messages ?? [], model: model.id, tools: projectTools(tools) },
         model,
       );
 
       const effort = effortOf(options);
-      const expectedInitTools: string[] = [];
+      const expectedInitTools: string[] = tools.map((t: Json) => `mcp__${MCP_SERVER}__${t.name}`);
+      let swapped = false; // this turn reopened for a model/effort/tool-set change
 
       const openSession = (): Session => {
-        debug("opening session:", model.id, effort || "(default effort)");
-        return new Session({ model: model.id, systemPrompt: context.systemPrompt ?? "", effort });
+        debug("opening session:", model.id, effort || "(default effort)", tools.length, "tool(s)");
+        return new Session({ model: model.id, systemPrompt: context.systemPrompt ?? "", effort, tools, toolsSig });
       };
       const swapSession = (): Session => {
         if (s && ownsBusy) {
@@ -352,13 +393,21 @@ function streamClaude(model: Json, context: Json, options?: Json) {
 
       if (!session || session.dead()) {
         session = openSession();
-      } else if (session.modelId !== model.id || session.effort !== effort) {
-        // Model and effort are pinned at spawn (argv-scoped), so the
-        // only convergent move is a full reopen — at the cost of a
-        // fresh model context.
-        debug(session.modelId !== model.id ? "model swap: reopening session" : "effort change: reopening session");
+      } else if (session.modelId !== model.id || session.effort !== effort || session.toolsSig !== toolsSig) {
+        // Model and effort are pinned at spawn (argv-scoped) and the
+        // tool surface by the session's MCP handshake, so the only
+        // convergent move is a full reopen — at the cost of a fresh
+        // model context.
+        debug(
+          session.modelId !== model.id
+            ? "model swap: reopening session"
+            : session.effort !== effort
+              ? "effort change: reopening session"
+              : "tool set drift: reopening session",
+        );
         session.close();
         session = openSession();
+        swapped = true;
       }
       s = session;
       if (s.busy) throw new Error("pi-with-claude: concurrent turns on one session are unsupported");
@@ -368,12 +417,14 @@ function streamClaude(model: Json, context: Json, options?: Json) {
 
       const candidate = projectMessages(context.messages);
       let sendable: Json[] = [];
+      let freshStarted = false; // a fresh session was forced; only trailing user input can ride it
 
       // takeFreshStart resets the session bookkeeping to what a
       // brand-new claude session can honestly receive, and records
       // everything else in the dropped ledger so it is never
       // re-flagged as new.
       const takeFreshStart = () => {
+        freshStarted = true;
         sendable = freshStart(candidate);
         s!.noted = [];
         s!.inFlight = false;
@@ -420,13 +471,74 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         if (sendable.length < fresh.length) debug("withheld", fresh.length - sendable.length, "steering message(s)");
       } else {
         sendable = fresh;
+        if (sendable.some(hasToolResult)) {
+          // A tool_result between turns answers a call whose turn
+          // already ended — stale by the taxonomy, and the degraded
+          // restart path answers it.
+          debug("stale tool_result between turns: reopening session");
+          s = swapSession();
+          takeFreshStart();
+        }
       }
-      if (sendable.length === 0) throw new Error("pi-with-claude: nothing new to run in this turn");
 
-      const content = userContentOf(sendable);
-      if (content.length === 0) throw new Error("pi-with-claude: nothing new to run in this turn");
-      s.pushUser(content);
-      debug("turn sent:", s.noted.length, "noted +", sendable.length, "new");
+      // Resume path: while a model turn is paused on tool calls, the
+      // sendable suffix is completions — each resolves the parked
+      // handler its call_id names, and the CLI turn continues in
+      // place. An unknown or already-completed id is stale and takes
+      // the honest restart with nothing applied.
+      let resumed = false;
+      if (s.inFlight && sendable.length > 0) {
+        const completions = sendable.flatMap((m: Json) => m.blocks.filter((b: Json) => b.type === "tool_result"));
+        const missing = completions.filter((c: Json) => !s!.parkedById.has(c.call_id));
+        if (missing.length > 0) {
+          debug("unclaimable tool_result on the paused turn: reopening session");
+          s = swapSession();
+          takeFreshStart();
+        } else {
+          for (const c of completions) {
+            const entry = s.parkedById.get(c.call_id)!;
+            s.parkedById.delete(c.call_id);
+            // Deny-as-data: an is_error result flows to the model as an
+            // error-flagged MCP result and the turn continues
+            // (spike-proven).
+            entry.resolve({ content: c.content ?? [], isError: !!c.is_error });
+          }
+          resumed = true;
+          debug("resumed", completions.length, "tool call(s)");
+        }
+      }
+
+      if (sendable.length === 0 && !resumed) {
+        // Recoverable dead ends, each with a different recovery — so
+        // the turn says which one it was rather than the symptom.
+        if (freshStarted) {
+          const cause = swapped
+            ? `switching to ${model.id}`
+            : "history the model had already seen changed underneath this session, which";
+          throw new Error(
+            `pi-with-claude: ${cause} starts a fresh session, and a fresh session cannot answer a ` +
+              "tool call that was already in flight. Nothing was sent" +
+              (swapped ? " and the switch is still pending" : "") +
+              " — send a message to start it.",
+          );
+        }
+        if (s.inFlight) {
+          throw new Error(
+            "pi-with-claude: a tool call is in flight, so only its results can go down now. The " +
+              "text is held and goes out with the next ordinary turn.",
+          );
+        }
+        throw new Error("pi-with-claude: nothing new to run in this turn");
+      }
+      if (resumed) {
+        s.inFlight = false;
+        debug("turn resumed:", s.noted.length, "noted +", sendable.length, "completion(s)");
+      } else {
+        const content = userContentOf(sendable);
+        if (content.length === 0) throw new Error("pi-with-claude: nothing new to run in this turn");
+        s.pushUser(content);
+        debug("turn sent:", s.noted.length, "noted +", sendable.length, "new");
+      }
 
       // Streaming state: one open block at a time on the claude wire.
       let openKind: "text" | "thinking" | null = null;
@@ -459,7 +571,67 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // fixtures/turn-deltas.jsonl); their concatenation is the message
       // Pi stores and re-projects next turn.
       const turnBlocks: Json[] = [];
-      let reason = "";
+
+      // finalizeTurn closes the stretch — at a tool-call pause or the
+      // result — with the accumulated assistant frames as the
+      // authoritative message Pi stores and re-projects next turn.
+      const finalizeTurn = (reason: string) => {
+        closeBlock();
+        // Recover reasoning the CLI streamed but reported empty in its
+        // final frames (characterized: assistant frames can carry a
+        // thinking block with no text while the deltas carried it). A
+        // turn that never streamed thinking stays honestly empty —
+        // nothing is invented.
+        const streamedThinking = output.content.filter((c: Json) => c.type === "thinking");
+        output.content = sdkContentToPi(turnBlocks);
+        let ti = 0;
+        for (const c of output.content) {
+          if (c.type !== "thinking") continue;
+          const st = streamedThinking[ti++];
+          if (!c.thinking && st?.thinking) c.thinking = st.thinking;
+        }
+        s!.inFlight = reason === "tool_calls";
+        s!.noted.push(...sendable, { role: "assistant", blocks: assistantBlocks(output.content) });
+        output.content.forEach((c: Json, i: number) => {
+          if (c.type === "toolCall") {
+            stream.push({ type: "toolcall_start", contentIndex: i, partial: output });
+            stream.push({ type: "toolcall_end", contentIndex: i, toolCall: c, partial: output });
+          }
+        });
+        output.stopReason = REASON_TO_STOP[reason] ?? "error";
+      };
+
+      // The pause condition: the model's message ended in tool_use
+      // blocks and every one of them has a parked handler (the CLI
+      // dispatches only after the message completes, so all blocks are
+      // on the stream before the first handler parks). Handlers the
+      // CLI dispatched without a _meta tool_use id are bound to blocks
+      // by name, input equality preferred — two concurrent calls with
+      // the same name and input are interchangeable by construction.
+      const toolUseBlocks = () => turnBlocks.filter((b: Json) => b.type === "tool_use");
+      const pauseReady = (): boolean => {
+        const blocks = toolUseBlocks();
+        if (blocks.length === 0) return false;
+        const unbound = [...s!.parkedUnbound];
+        for (const b of blocks) {
+          if (s!.parkedById.has(b.id)) continue;
+          const i = unbound.findIndex((e) => e.name === plainToolName(b.name));
+          if (i < 0) return false;
+          unbound.splice(i, 1);
+        }
+        return true;
+      };
+      const bindParked = () => {
+        for (const b of toolUseBlocks()) {
+          if (s!.parkedById.has(b.id)) continue;
+          const matches = s!.parkedUnbound.filter((e) => e.name === plainToolName(b.name));
+          const exact = matches.find((e) => JSON.stringify(e.input) === JSON.stringify(b.input));
+          const chosen = exact ?? matches[0];
+          if (!chosen) continue;
+          s!.parkedUnbound.splice(s!.parkedUnbound.indexOf(chosen), 1);
+          s!.parkedById.set(b.id, chosen);
+        }
+      };
 
       for (;;) {
         const frame = await s.read();
@@ -475,18 +647,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         } else if (frame.type === "system" && frame.subtype === "init") {
           assertInitSurface(frame.tools, expectedInitTools);
         } else if (frame.type === "result") {
-          closeBlock();
-          reason = frame.subtype === "success" ? "end_turn" : "error";
-          // The accumulated assistant frames are authoritative: Pi
-          // stores this exact structure and re-projects it next turn.
-          output.content = sdkContentToPi(turnBlocks);
-          s.noted.push(...sendable, { role: "assistant", blocks: assistantBlocks(output.content) });
-          output.content.forEach((c: Json, i: number) => {
-            if (c.type === "toolCall") {
-              stream.push({ type: "toolcall_start", contentIndex: i, partial: output });
-              stream.push({ type: "toolcall_end", contentIndex: i, toolCall: c, partial: output });
-            }
-          });
+          finalizeTurn(frame.subtype === "success" ? "end_turn" : "error");
           if (frame.usage) {
             // Pi reads context occupancy out of this object in TWO
             // places (compaction threshold: totalTokens; pi-ai
@@ -507,13 +668,20 @@ function streamClaude(model: Json, context: Json, options?: Json) {
             output.usage.output = frame.usage.output_tokens ?? 0;
             output.usage.totalTokens = occupancy;
           }
-          output.stopReason = REASON_TO_STOP[reason] ?? "error";
           if (output.stopReason === "error") output.errorMessage = `pi-with-claude: turn ended ${frame.subtype}`;
           break;
         } else if (frame.type === "__closed") {
           throw new Error(`pi-with-claude: session stream ended mid-turn${frame.error ? `: ${frame.error}` : ""}`);
         }
-        // system/status, rate_limit_event, unknown types: tolerated.
+        // system/status, user echoes, rate_limit_event, unknown types:
+        // tolerated. __tool_parked exists purely to re-run the pause
+        // check below.
+        if ((frame.type === "assistant" || frame.type === "__tool_parked") && pauseReady()) {
+          bindParked();
+          debug("tool pause:", toolUseBlocks().length, "call(s) parked");
+          finalizeTurn("tool_calls");
+          break;
+        }
       }
 
       if (output.stopReason === "pending") throw new Error("session stream ended without a stop reason");

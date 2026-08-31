@@ -117,7 +117,7 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
       harness copied, SDK pinned with vet record, this spec copied in.
 - [x] S2 Walking skeleton: one text turn streams through real Pi against
       the fake — open, delta, stop, usage. (after S1)
-- [ ] S3 Mirror, diff, honest-restart taxonomy, and tool inversion:
+- [x] S3 Mirror, diff, honest-restart taxonomy, and tool inversion:
       pause/resume, deny-as-data, handler cancellation. (after S2)
 - [ ] S4 Occupancy and cost: getContextUsage translation, iterations
       split, Pi compaction thresholds fed truthfully. (after S3)
