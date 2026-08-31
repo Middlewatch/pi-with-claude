@@ -123,7 +123,7 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
       split, Pi compaction thresholds fed truthfully. (after S3)
 - [x] S5 Interrupt and steering: interrupt mapping, steering withheld
       in-flight and delivered next turn. (after S3)
-- [ ] S6 Reopen paths: model/effort/tool-set switches, accounts menu
+- [x] S6 Reopen paths: model/effort/tool-set switches, accounts menu
       with CLAUDE_CONFIG_DIR selection and paused-tool-call refusal.
       (after S3)
 - [ ] S7 Images and folding: image blocks down the wire, ADR 0001

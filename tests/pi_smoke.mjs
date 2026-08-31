@@ -56,13 +56,17 @@ function checkOccupancy(msg, where) {
 async function loadProvider() {
   const { default: register } = await import(new URL("../src/index.ts", import.meta.url));
   let captured = null;
+  const commands = new Map();
   register({
     registerProvider(id, config) {
       captured = { id, config };
     },
-    registerCommand() {},
+    registerCommand(name, config) {
+      commands.set(name, config);
+    },
   });
   if (!captured) fail("extension did not call registerProvider");
+  captured.commands = commands;
   return captured;
 }
 
@@ -247,6 +251,129 @@ if (phase === "--steering") {
   process.exit(0);
 }
 
+if (phase === "--swap") {
+  // A model swap must reopen the session with the new model pinned —
+  // never keep streaming on the old one. The parent asserts the trace
+  // and the fake's argv.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = { systemPrompt: "You are a test.", messages: [{ role: "user", content: "one", timestamp: Date.now() }] };
+  const m1 = await turnOf(cfg, model, ctx);
+  if (m1.stopReason !== "stop") fail(`swap turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  ctx.messages.push(m1, { role: "user", content: "and again", timestamp: Date.now() });
+  const swappedModel = { ...model, id: cfg.models[1].id };
+  const m2 = await turnOf(cfg, swappedModel, ctx);
+  if (m2.stopReason !== "stop") fail(`swap turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  if (m2.model !== swappedModel.id) fail(`swap turn 2 model ${m2.model}, want ${swappedModel.id}`);
+  console.log("pi_smoke swap: OK");
+  process.exit(0);
+}
+
+if (phase === "--effort") {
+  // Pi hands the level down as options.reasoning; it must reach the
+  // spawned CLI as --effort, a change reopens, and an unsupported
+  // level sends no flag at all.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = { systemPrompt: "You are a test.", messages: [{ role: "user", content: "one", timestamp: Date.now() }] };
+  const e1 = await turnOf(cfg, model, ctx, { reasoning: "high" });
+  if (e1.stopReason !== "stop") fail(`effort turn 1 stopReason ${e1.stopReason}: ${e1.errorMessage ?? ""}`);
+  ctx.messages.push(e1, { role: "user", content: "two", timestamp: Date.now() });
+  // pi's `minimal` has no CLI equivalent and folds onto low.
+  const e2 = await turnOf(cfg, model, ctx, { reasoning: "minimal" });
+  if (e2.stopReason !== "stop") fail(`effort turn 2 stopReason ${e2.stopReason}: ${e2.errorMessage ?? ""}`);
+  ctx.messages.push(e2, { role: "user", content: "three", timestamp: Date.now() });
+  // `off` is declared unsupported: no flag at all, not a guess at low.
+  const e3 = await turnOf(cfg, model, ctx, { reasoning: "off" });
+  if (e3.stopReason !== "stop") fail(`effort turn 3 stopReason ${e3.stopReason}: ${e3.errorMessage ?? ""}`);
+  console.log("pi_smoke effort: OK");
+  process.exit(0);
+}
+
+if (phase === "--account") {
+  // Turn 1 runs on the ambient environment, the /pi-with-claude
+  // Account menu picks entry b, and turn 2 must reopen with
+  // CLAUDE_CONFIG_DIR routed to it. The parent asserts the fake's
+  // environment and the persisted selection.
+  const { id, config: cfg, commands } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const cmd = commands.get("pi-with-claude");
+  if (!cmd) fail("extension did not register the pi-with-claude command");
+  const ctx = { systemPrompt: "You are a test.", messages: [{ role: "user", content: "one", timestamp: Date.now() }] };
+  const m1 = await turnOf(cfg, model, ctx);
+  if (m1.stopReason !== "stop") fail(`account turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+
+  const notes = [];
+  let sawAccountMenu = false;
+  await cmd.handler("", {
+    hasUI: true,
+    ui: {
+      notify: (msg) => notes.push(msg),
+      select: async (title, options) => {
+        if (title === "pi-with-claude") return options[0]; // "Account"
+        if (title !== "Account") fail(`unexpected menu ${JSON.stringify(title)}`);
+        sawAccountMenu = true;
+        if (options.length !== 2) fail(`Account menu offered ${options.length} row(s), want 2`);
+        const row = options.find((o) => o.trim() === "b");
+        if (!row) fail(`no roster row for account b in ${JSON.stringify(options)}`);
+        return row;
+      },
+    },
+  });
+  if (!sawAccountMenu) fail("/pi-with-claude did not reach the Account submenu");
+  if (!notes.some((n) => n.includes("pi-with-claude account:"))) fail(`no selection notice in ${JSON.stringify(notes)}`);
+
+  ctx.messages.push(m1, { role: "user", content: "two", timestamp: Date.now() });
+  const m2 = await turnOf(cfg, model, ctx);
+  if (m2.stopReason !== "stop") fail(`account turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  console.log("pi_smoke account: OK");
+  process.exit(0);
+}
+
+if (phase === "--account-tools") {
+  // Switching while a tool call is paused: the swap forces a fresh
+  // session, which cannot answer a call it never made. The turn must
+  // fail saying so — never the bare "nothing new to run" — and leave
+  // the switch PENDING, so the next ordinary message performs it.
+  const { id, config: cfg, commands } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const cmd = commands.get("pi-with-claude");
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "add 2 and 3", timestamp: Date.now() }],
+  };
+  const p1 = await turnOf(cfg, model, ctx);
+  if (p1.stopReason !== "toolUse") fail(`tool-pause setup stopReason ${p1.stopReason}`);
+  const call = p1.content.find((c) => c.type === "toolCall");
+  ctx.messages.push(p1, {
+    role: "toolResult", toolCallId: call.id, toolName: call.name,
+    content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now(),
+  });
+
+  await cmd.handler("", {
+    hasUI: true,
+    ui: {
+      notify: () => {},
+      select: async (title, options) =>
+        title === "pi-with-claude" ? options[0] : options.find((o) => o.trim() === "b"),
+    },
+  });
+
+  const p2 = await turnOf(cfg, model, ctx);
+  if (p2.stopReason !== "error") fail(`switch-during-tool-pause stopReason ${p2.stopReason}, want error`);
+  const msg = p2.errorMessage ?? "";
+  if (msg.includes("nothing new to run")) fail(`unexplained failure surfaced to the user: ${msg}`);
+  if (!msg.includes("still pending")) fail(`failure does not say the switch survives: ${msg}`);
+
+  // The recovery the message promises must actually work.
+  ctx.messages.push({ role: "user", content: "carry on", timestamp: Date.now() });
+  const p3 = await turnOf(cfg, model, ctx);
+  if (p3.stopReason === "error") fail(`recovery turn failed: ${p3.errorMessage}`);
+  console.log("pi_smoke account-tools: OK");
+  process.exit(0);
+}
+
 if (phase !== undefined) fail(`unknown phase ${phase}`);
 
 // ---------------------------------------------------------------------
@@ -297,9 +424,15 @@ function piTurn(message, { env = {}, extraArgs = [] } = {}) {
   return { r, trace, wire };
 }
 
-function runStubPhase(flag, env = {}) {
+function runStubPhase(flag, env = {}, { keep = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "pwc-phase-"));
   const tracePath = join(dir, "trace.log");
+  const wirePath = join(dir, "fake.log");
+  // "{DIR}" in an env value resolves to the phase's temp dir, so a
+  // phase can be handed paths inside its own sandbox.
+  const resolved = Object.fromEntries(
+    Object.entries(env).map(([k, v]) => [k, typeof v === "string" ? v.replaceAll("{DIR}", dir) : v]),
+  );
   const child = spawnSync(process.execPath, [here, flag], {
     encoding: "utf-8",
     timeout: 120000,
@@ -307,18 +440,40 @@ function runStubPhase(flag, env = {}) {
       ...process.env,
       PI_WITH_CLAUDE_CLAUDE: join(root, "tests", "fake_claude.py"),
       PI_WITH_CLAUDE_DEBUG: tracePath,
-      ...env,
+      FAKE_CLAUDE_LOG: wirePath,
+      ...resolved,
     },
   });
   let trace = "";
+  let wire = [];
   try {
     trace = readFileSync(tracePath, "utf-8");
   } catch {}
+  try {
+    wire = readFileSync(wirePath, "utf-8")
+      .split("\n")
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line)];
+        } catch {
+          return [];
+        }
+      });
+  } catch {}
+  const kept = Object.fromEntries(
+    keep.map((rel) => {
+      try {
+        return [rel, readFileSync(join(dir, rel), "utf-8").trim()];
+      } catch {
+        return [rel, null];
+      }
+    }),
+  );
   rmSync(dir, { recursive: true, force: true });
   if (child.status !== 0) {
     fail(`${flag} phase exited ${child.status}: ${child.stderr?.slice(0, 500)} ${child.stdout?.slice(0, 300)}`);
   }
-  return trace;
+  return { trace, wire, dir, kept };
 }
 
 const count = (text, pattern) => (text.match(pattern) ?? []).length;
@@ -383,20 +538,20 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
 
 // --- Stub-API children.
 {
-  const trace = runStubPhase("--seeded");
+  const { trace } = runStubPhase("--seeded");
   if (count(trace, /fresh start:/g) !== 1) fail(`seeded phase fresh-started ${count(trace, /fresh start:/g)} time(s), want exactly 1`);
   if (count(trace, /turn sent:/g) !== 2) fail(`seeded phase sent ${count(trace, /turn sent:/g)} turn(s), want 2`);
   if (count(trace, /reopening session/g) !== 0) fail("seeded phase reopened — resume regression");
 }
 {
-  const trace = runStubPhase("--stale");
+  const { trace } = runStubPhase("--stale");
   if (count(trace, /stale tool_result between turns: reopening session/g) !== 1) {
     fail(`stale phase did not take the stale-restart path:\n${trace.slice(-800)}`);
   }
   if (count(trace, /fresh start:/g) !== 1) fail("stale phase must fresh-start exactly once");
 }
 {
-  const trace = runStubPhase("--deny");
+  const { trace } = runStubPhase("--deny");
   if (count(trace, /tool pause: 1 call\(s\) parked/g) !== 1) fail("deny phase saw no tool pause");
   if (count(trace, /resumed 1 tool call\(s\)/g) !== 1) fail("deny phase saw no resume");
   if (count(trace, /reopening session/g) !== 0) fail("deny phase reopened — deny must flow as data");
@@ -405,7 +560,7 @@ for (const [flag, fixture] of [
   ["--empty-thinking", "tool-call-turn-empty-thinking.jsonl"],
   ["--thinkless", "tool-call-turn-thinkless.jsonl"],
 ]) {
-  const trace = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture) });
+  const { trace } = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture) });
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
     if (count(trace, pattern) !== 0) fail(`${flag} took a ${label} — the mirror mismatched across the tool loop`);
   }
@@ -414,13 +569,13 @@ for (const [flag, fixture] of [
   // Park after 8 replayed frames: init, status, message_start, block
   // start, and two thinking deltas are through, so the abort lands
   // mid-stream with partial content to preserve.
-  const trace = runStubPhase("--interrupt", { FAKE_CLAUDE_HOLD_AFTER: "8" });
+  const { trace } = runStubPhase("--interrupt", { FAKE_CLAUDE_HOLD_AFTER: "8" });
   if (count(trace, /interrupt requested/g) !== 1) fail("interrupt phase never requested the interrupt");
   if (!/frame: result error_during_execution/.test(trace)) fail("interrupt phase saw no error_during_execution result");
   if (count(trace, /reopening session/g) !== 0) fail("interrupt phase reopened — an interrupt must not cost the session");
 }
 {
-  const trace = runStubPhase("--steering");
+  const { trace } = runStubPhase("--steering");
   // Two withholds: the steering-only refusal filters it first, then
   // the completion turn withholds it from the resumed flight.
   if (count(trace, /withheld 1 steering message\(s\)/g) !== 2) {
@@ -429,6 +584,61 @@ for (const [flag, fixture] of [
   if (count(trace, /turn sent:/g) !== 2) fail("steering phase: want exactly 2 sent turns (opening + delivery)");
   if (count(trace, /turn resumed:/g) !== 1) fail("steering phase: want exactly 1 resumed turn");
   if (count(trace, /reopening session/g) !== 0) fail("steering phase reopened — withheld steering must not restart");
+}
+{
+  const { trace, wire } = runStubPhase("--swap");
+  if (count(trace, /model swap: reopening session/g) !== 1) fail("swap phase: want exactly 1 model-swap reopen");
+  const models = wire
+    .filter((o) => o.fake_argv)
+    .map((o) => o.fake_argv[o.fake_argv.indexOf("--model") + 1]);
+  if (models.join(",") !== "haiku,sonnet") fail(`fake claude spawned with --model ${models.join(",")}, want haiku,sonnet`);
+}
+{
+  const { trace, wire } = runStubPhase("--effort");
+  const efforts = wire
+    .filter((o) => o.fake_argv)
+    .map((o) => {
+      const i = o.fake_argv.indexOf("--effort");
+      return i < 0 ? "(none)" : o.fake_argv[i + 1];
+    });
+  if (efforts.join(",") !== "high,low,(none)") {
+    fail(`fake claude spawned with --effort ${efforts.join(",")}, want high,low,(none)`);
+  }
+  if (count(trace, /effort change: reopening session/g) !== 2) {
+    fail("effort phase: want exactly 2 effort-change reopens (high->low, low->off)");
+  }
+}
+{
+  // The roster is pinned through PI_WITH_CLAUDE_ACCOUNTS and the
+  // selection state redirected to a sandbox XDG_CONFIG_HOME, so this
+  // never reads or writes the developer's own accounts.
+  const accountEnv = {
+    PI_WITH_CLAUDE_ACCOUNTS: "a={DIR}/account-a,b={DIR}/account-b",
+    XDG_CONFIG_HOME: "{DIR}/xdg",
+    PI_WITH_CLAUDE_ACCOUNT: "",
+    CLAUDE_CONFIG_DIR: "",
+  };
+  const { trace, wire, kept } = runStubPhase("--account", accountEnv, { keep: ["xdg/pi-with-claude/account"] });
+  if (count(trace, /account swap: reopening session/g) !== 1) fail("account phase: want exactly 1 account-swap reopen");
+  const dirs = wire.filter((o) => "fake_config_dir" in o).map((o) => o.fake_config_dir || "(none)");
+  if (dirs.length !== 2 || dirs[0] !== "(none)" || !dirs[1]?.endsWith("account-b")) {
+    fail(`fake claude saw CLAUDE_CONFIG_DIR ${dirs.join(",")}, want (none) then .../account-b`);
+  }
+  const persisted = kept["xdg/pi-with-claude/account"];
+  if (!persisted?.endsWith("account-b")) fail(`persisted selection ${JSON.stringify(persisted)}, want .../account-b`);
+}
+{
+  const { trace, wire } = runStubPhase("--account-tools", {
+    PI_WITH_CLAUDE_ACCOUNTS: "a={DIR}/account-a,b={DIR}/account-b",
+    XDG_CONFIG_HOME: "{DIR}/xdg",
+    PI_WITH_CLAUDE_ACCOUNT: "",
+    CLAUDE_CONFIG_DIR: "",
+  });
+  if (count(trace, /account swap: reopening session/g) !== 1) fail("account-tools phase: want exactly 1 reopen");
+  const dirs = wire.filter((o) => "fake_config_dir" in o).map((o) => o.fake_config_dir || "(none)");
+  if (!dirs.at(-1)?.endsWith("account-b")) {
+    fail(`held switch never reached the child: CLAUDE_CONFIG_DIR ${dirs.join(",")}`);
+  }
 }
 
 console.log("pi_smoke: OK — all phases green");

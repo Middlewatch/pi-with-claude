@@ -34,6 +34,7 @@ import {
   wireNames,
 } from "./projection.ts";
 import { makeToolServer, type ToolCallRequest } from "./tools.ts";
+import { accounts, ambient, pinned, selectAccount, selected } from "./accounts.ts";
 
 type Json = any;
 
@@ -92,6 +93,7 @@ class Session {
   modelId: string; // pinned at open; a swap forces a reopen
   effort: string; // pinned at open (argv-scoped); a change forces a reopen
   toolsSig: string; // registered tool set, pinned by the MCP handshake; drift forces a reopen
+  configDir: string | null; // account pinned in the child's environment at spawn; a swap forces a reopen
   // The mirror: every neutral message the live session has absorbed, in
   // absorption order — accepted suffixes verbatim, then each turn's
   // assistant message as Pi will hand it back.
@@ -114,10 +116,18 @@ class Session {
   private queue: Json[] = [];
   private wake: (() => void) | null = null;
 
-  constructor(cfg: { model: string; systemPrompt: string; effort: string; tools: Json[]; toolsSig: string }) {
+  constructor(cfg: {
+    model: string;
+    systemPrompt: string;
+    effort: string;
+    tools: Json[];
+    toolsSig: string;
+    configDir: string | null;
+  }) {
     this.modelId = cfg.model;
     this.effort = cfg.effort;
     this.toolsSig = cfg.toolsSig;
+    this.configDir = cfg.configDir;
     const self = this;
     async function* prompt() {
       for (;;) {
@@ -139,7 +149,11 @@ class Session {
       // (spike finding). Pi owns gating; nothing to gate here.
       canUseTool: async (_name: string, input: Json) => ({ behavior: "allow", updatedInput: input }),
       includePartialMessages: true,
-      env: { ...process.env },
+      // The account rides the child's environment: CLAUDE_CONFIG_DIR
+      // selects which subscription `claude` authenticates as (I1: the
+      // variable, never a credential). null keeps the ambient
+      // environment — the pre-account behaviour.
+      env: cfg.configDir ? { ...process.env, CLAUDE_CONFIG_DIR: cfg.configDir } : { ...process.env },
       // Own the child spawn so the session cannot hold the host's event
       // loop open between turns: Pi's -p mode ends when the loop
       // drains, and stdin EOF is the CLI's own close signal, so orphan
@@ -248,6 +262,16 @@ class Session {
 }
 
 let session: Session | null = null;
+
+// The account the NEXT opened session authenticates as; null is the
+// ambient environment. Read at the start of each turn, so a switch
+// lands on a turn boundary rather than mid-session. `undefined` means
+// not yet resolved: resolution can spawn a probe, and an extension
+// factory may run in an invocation that never starts a session, so it
+// is deferred to the first turn or the first menu.
+let activeAccount: string | null | undefined;
+const currentAccount = (): string | null =>
+  activeAccount === undefined ? (activeAccount = selected()) : activeAccount;
 
 // ---------------------------------------------------------------------
 // Wire translation at the SDK boundary.
@@ -375,13 +399,23 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         model,
       );
 
+      // Resolved once per turn: a switch made mid-turn takes effect on
+      // the next one, never under an in-flight session.
+      const accountDir = currentAccount();
       const effort = effortOf(options);
       const expectedInitTools: string[] = tools.map((t: Json) => `mcp__${MCP_SERVER}__${t.name}`);
-      let swapped = false; // this turn reopened for a model/effort/tool-set change
+      let swapped = false; // this turn reopened for a model/account/effort/tool-set change
 
       const openSession = (): Session => {
         debug("opening session:", model.id, effort || "(default effort)", tools.length, "tool(s)");
-        return new Session({ model: model.id, systemPrompt: context.systemPrompt ?? "", effort, tools, toolsSig });
+        return new Session({
+          model: model.id,
+          systemPrompt: context.systemPrompt ?? "",
+          effort,
+          tools,
+          toolsSig,
+          configDir: accountDir,
+        });
       };
       const swapSession = (): Session => {
         if (s && ownsBusy) {
@@ -398,17 +432,24 @@ function streamClaude(model: Json, context: Json, options?: Json) {
 
       if (!session || session.dead()) {
         session = openSession();
-      } else if (session.modelId !== model.id || session.effort !== effort || session.toolsSig !== toolsSig) {
-        // Model and effort are pinned at spawn (argv-scoped) and the
-        // tool surface by the session's MCP handshake, so the only
-        // convergent move is a full reopen — at the cost of a fresh
-        // model context.
+      } else if (
+        session.modelId !== model.id ||
+        session.effort !== effort ||
+        session.toolsSig !== toolsSig ||
+        session.configDir !== accountDir
+      ) {
+        // Model and effort are pinned at spawn (argv-scoped), the
+        // account in the child's environment, and the tool surface by
+        // the session's MCP handshake, so the only convergent move is a
+        // full reopen — at the cost of a fresh model context.
         debug(
-          session.modelId !== model.id
-            ? "model swap: reopening session"
-            : session.effort !== effort
-              ? "effort change: reopening session"
-              : "tool set drift: reopening session",
+          session.configDir !== accountDir
+            ? "account swap: reopening session"
+            : session.modelId !== model.id
+              ? "model swap: reopening session"
+              : session.effort !== effort
+                ? "effort change: reopening session"
+                : "tool set drift: reopening session",
         );
         session.close();
         session = openSession();
@@ -526,8 +567,12 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         // Recoverable dead ends, each with a different recovery — so
         // the turn says which one it was rather than the symptom.
         if (freshStarted) {
+          // Name the actual cause — a swap the user asked for reads very
+          // differently from history moving underneath us, and blaming
+          // the wrong one sends them hunting.
+          const where = accountDir ? accountDir.split("/").pop() : "the inherited account";
           const cause = swapped
-            ? `switching to ${model.id}`
+            ? `switching to ${where} / ${model.id}`
             : "history the model had already seen changed underneath this session, which";
           throw new Error(
             `pi-with-claude: ${cause} starts a fresh session, and a fresh session cannot answer a ` +
@@ -803,4 +848,58 @@ export default function (pi: ExtensionAPI) {
     // packages, which this extension deliberately never does.
     streamSimple: streamClaude as Json,
   });
+
+  pi.registerCommand("pi-with-claude", {
+    description: "pi-with-claude settings (account)",
+    getArgumentCompletions: (prefix: string) => {
+      const items = ["account"].filter((v) => v.startsWith(prefix)).map((v) => ({ value: v, label: v }));
+      return items.length > 0 ? items : null;
+    },
+    handler: async (args: string, ctx: Json) => {
+      if (!ctx.hasUI) return;
+      const section = args?.trim() || (await ctx.ui.select("pi-with-claude", ["Account"]));
+      if (!section) return;
+      if (section.toLowerCase() !== "account") {
+        ctx.ui.notify(`pi-with-claude: unknown section ${JSON.stringify(section)}`, "warning");
+        return;
+      }
+      await accountMenu(ctx);
+    },
+  });
+}
+
+// The Account submenu. Labels come from `claude auth status` (I1: the
+// vendor's own status command, never a credential file). Selecting an
+// account does not disturb the live session — the next turn sees the new
+// value and reopens onto it.
+async function accountMenu(ctx: Json) {
+  const roster = accounts();
+  if (roster.length === 0) {
+    ctx.ui.notify(
+      "pi-with-claude: no signed-in accounts found. Log one in with " +
+        "`CLAUDE_CONFIG_DIR=~/.claude-<name> claude auth login`, or set PI_WITH_CLAUDE_ACCOUNTS.",
+      "warning",
+    );
+    return;
+  }
+  if (pinned()) {
+    ctx.ui.notify(`pi-with-claude: account pinned by PI_WITH_CLAUDE_ACCOUNT (${currentAccount()})`, "warning");
+    return;
+  }
+  // With nothing selected the child runs on the ambient environment; mark
+  // whichever roster entry that resolves to, so the menu shows what is
+  // actually in force rather than an empty list.
+  const active = currentAccount() ?? ambient();
+  const rows = roster.map((a) => ({ dir: a.dir, text: `${a.dir === active ? "● " : "  "}${a.label}` }));
+  const choice = await ctx.ui.select("Account", rows.map((r) => r.text));
+  if (!choice) return;
+  const picked = rows.find((r) => r.text === choice);
+  if (!picked || picked.dir === active) return;
+  selectAccount(picked.dir);
+  activeAccount = picked.dir;
+  debug("account selected:", picked.dir);
+  ctx.ui.notify(
+    `pi-with-claude account: ${picked.text.slice(2)} — takes effect next turn (the model's context restarts).`,
+    "info",
+  );
 }
