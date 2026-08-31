@@ -251,6 +251,48 @@ if (phase === "--steering") {
   process.exit(0);
 }
 
+if (phase === "--init-surface") {
+  // I6 negative drill: a claude advertising a tool nobody requested
+  // (fake_claude --advertise-extra-tool, via a wrapper since the SDK
+  // owns the argv) must fail the turn, not stream on a lying surface.
+  const { writeFileSync, mkdtempSync: mkTmp, chmodSync } = await import("node:fs");
+  const wrapDir = mkTmp(join(tmpdir(), "pwc-wrap-"));
+  const wrapper = join(wrapDir, "claude-extra-tool");
+  writeFileSync(wrapper, `#!/bin/sh\nexec python3 "${join(root, "tests", "fake_claude.py")}" --advertise-extra-tool "$@"\n`);
+  chmodSync(wrapper, 0o755);
+  process.env.PI_WITH_CLAUDE_CLAUDE = wrapper;
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const m = await turnOf(cfg, model, {
+    systemPrompt: "You are a test.",
+    messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+  });
+  if (m.stopReason !== "error") fail(`lying init surface stopReason ${m.stopReason}, want error`);
+  if (!(m.errorMessage ?? "").includes("I6")) fail(`error does not name the surface assertion: ${m.errorMessage}`);
+  console.log("pi_smoke init-surface: OK");
+  process.exit(0);
+}
+
+if (phase === "--drift") {
+  // A mid-session tool-set change cannot converge on a pinned MCP
+  // handshake: it must reopen, never stream on the stale surface.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "one", timestamp: Date.now() }],
+  };
+  const m1 = await turnOf(cfg, model, ctx);
+  if (m1.stopReason !== "stop") fail(`drift turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  ctx.tools = [...ctx.tools, { name: "mul", description: "multiplies numbers", parameters: { type: "object" } }];
+  ctx.messages.push(m1, { role: "user", content: "two", timestamp: Date.now() });
+  const m2 = await turnOf(cfg, model, ctx);
+  if (m2.stopReason !== "stop") fail(`drift turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  console.log("pi_smoke drift: OK");
+  process.exit(0);
+}
+
 if (phase === "--fold") {
   // A folding extension (context-fold) rewrites absorbed history IN
   // PLACE — a stale tool_result's content and a thinking block's text
@@ -729,6 +771,15 @@ for (const [flag, fixture] of [
   }
 }
 
+runStubPhase("--init-surface"); // asserts internally on the I6 error
+{
+  // turn-deltas fixture keeps both drift turns text-only; the phase is
+  // about the reopen, not the tool loop.
+  const { trace } = runStubPhase("--drift", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "turn-deltas.jsonl") });
+  if (count(trace, /tool set drift: reopening session/g) !== 1) {
+    fail(`drift phase: want exactly 1 tool-set-drift reopen:\n${trace.slice(-600)}`);
+  }
+}
 {
   const { trace } = runStubPhase("--fold");
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {

@@ -183,6 +183,12 @@ class Session {
           type: "sdk",
           name: MCP_SERVER,
           instance: makeToolServer(cfg.tools, (req) => {
+            if (this.closed) {
+              // A dispatch racing the teardown parks nowhere: reject it
+              // now, since cancelParked already ran.
+              req.reject(new Error("pi-with-claude: session closed with a tool call in flight"));
+              return;
+            }
             if (req.toolUseId) this.parkedById.set(req.toolUseId, req);
             else this.parkedUnbound.push(req);
             // Wake the turn loop as a frame so the pause condition is
@@ -195,17 +201,23 @@ class Session {
     if (process.env.PI_WITH_CLAUDE_CLAUDE) options.pathToClaudeCodeExecutable = process.env.PI_WITH_CLAUDE_CLAUDE;
     this.q = query({ prompt: prompt(), options });
     // The pump: every SDK message lands in one FIFO the current turn
-    // reads from; the stream ending (or throwing) is delivered as a
-    // frame so a waiting turn never hangs.
+    // reads from; the stream ending (or throwing) marks the session
+    // dead and answers every present and future read with __closed, so
+    // no turn — this one or a later one — can hang on a spent stream.
     (async () => {
+      let error: string | undefined;
       try {
         for await (const m of this.q) this.deliver(m);
-        this.deliver({ type: "__closed" });
-      } catch (error) {
-        this.deliver({ type: "__closed", error: error instanceof Error ? error.message : String(error) });
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
       }
+      this.streamEnd = { type: "__closed", ...(error ? { error } : {}) };
+      this.closed = true;
+      for (const w of this.waiters.splice(0)) w(this.streamEnd);
     })();
   }
+
+  private streamEnd: Json | null = null;
 
   private deliver(m: Json) {
     const w = this.waiters.shift();
@@ -216,6 +228,7 @@ class Session {
   read(): Promise<Json> {
     const m = this.msgs.shift();
     if (m !== undefined) return Promise.resolve(m);
+    if (this.streamEnd) return Promise.resolve(this.streamEnd);
     return new Promise((r) => this.waiters.push(r));
   }
 
