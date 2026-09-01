@@ -1,6 +1,12 @@
 # Event stream — frozen wire contract
 
 **Pinned to:** `claude` 2.1.226 / Agent SDK 0.3.226.
+**Re-pinned 2026-08-31 to `claude` 2.1.252** via the native bridge
+(paid capture, `.local/evidence/2026-08-31-s3/`): init re-emitted per
+user frame, identical `capabilities` set, `apiKeySource: "none"` under
+subscription auth, result subtypes and cumulative-cost semantics
+unchanged (interrupted turn added nothing to `total_cost_usd`). No
+drift in the depended-on families.
 **Provenance:** characterization captures, 2026-08-09 — raw records with timestamps in
 `.local/artifacts/characterization-2026-08-09/` (the owner's untracked
 evidence surround; `leg_a.raw.jsonl`,

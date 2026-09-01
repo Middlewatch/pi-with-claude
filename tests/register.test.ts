@@ -27,7 +27,7 @@ test("registers the pi-with-claude provider with the settled roster", () => {
     ["haiku", "sonnet", "opus", "fable"],
   );
   const windows = Object.fromEntries(p.config.models.map((m: any) => [m.id, m.contextWindow]));
-  assert.deepEqual(windows, { haiku: 200000, sonnet: 967000, opus: 1000000, fable: 1000000 });
+  assert.deepEqual(windows, { haiku: 200000, sonnet: 1000000, opus: 1000000, fable: 1000000 });
   for (const m of p.config.models) {
     assert.equal(m.thinkingLevelMap.off, null, `${m.id}: 'off' must be hidden, not mapped`);
     assert.equal(m.thinkingLevelMap.minimal, "low");

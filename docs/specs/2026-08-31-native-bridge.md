@@ -96,7 +96,7 @@ gate, or a surviving runtime dependency falsifies the claim.
 - [x] S2 The swap: `extension.ts` onto the bridge, permission seam
       dropped, both runtime deps removed, DESIGN.md pin invariant
       rewritten, smoke and full gate green. (after S1)
-- [ ] S3 Paid characterization: re-pin contracts to the tested CLI
+- [x] S3 Paid characterization: re-pin contracts to the tested CLI
       version, billing proof with Pi's default prompt (plan limits, no
       third-party 400), floor and cache behavior re-measured, dated
       evidence. (after S2)

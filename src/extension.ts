@@ -746,18 +746,18 @@ export default function (pi: ExtensionAPI) {
     // the CLI's own cost estimate is surfaced separately (I7), so
     // Pi-side rates stay zero.
     // contextWindow is the CLI's OWN rawMaxTokens for that alias,
-    // measured token-free against claude 2.1.226 (claude-go,
-    // get_context_usage on a session that never sends a user message).
-    // The CLI is what actually compacts, so its number is the one Pi's
+    // measured token-free against claude 2.1.252 on 2026-08-31
+    // (get_context_usage over the bridge on a session that never sends
+    // a user message; .local/evidence/2026-08-31-s3/windows.txt). The
+    // CLI is what actually compacts, so its number is the one Pi's
     // gauge must agree with. Overstating is the dangerous direction:
     // too large a number means compaction never fires and a long
-    // session dies on overflow. Sonnet's 967000 is verbatim what the
-    // CLI reports (its own autocompact threshold sits 33000 below),
-    // not a typo for 1000000 — do not "round it up" without a fresh
+    // session dies on overflow. Sonnet moved 967000 → 1000000 between
+    // 2.1.226 and 2.1.252; change any of these only against a fresh
     // measurement.
     models: [
       { id: "haiku", name: "Claude Haiku via pi-with-claude", contextWindow: 200000 },
-      { id: "sonnet", name: "Claude Sonnet via pi-with-claude", contextWindow: 967000 },
+      { id: "sonnet", name: "Claude Sonnet via pi-with-claude", contextWindow: 1000000 },
       { id: "opus", name: "Claude Opus via pi-with-claude", contextWindow: 1000000 },
       { id: "fable", name: "Claude Fable via pi-with-claude", contextWindow: 1000000 },
     ].map((model) => ({

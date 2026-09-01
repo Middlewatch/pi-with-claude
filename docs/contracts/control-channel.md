@@ -1,6 +1,13 @@
 # Control channel — frozen wire contract
 
 **Pinned to:** `claude` 2.1.226 / Agent SDK 0.3.226.
+**Re-pinned 2026-08-31 to `claude` 2.1.252** via the native bridge
+(paid capture, `.local/evidence/2026-08-31-s3/`): initialize answered
+pre-input, interrupt receipt `{"still_queued": []}` verbatim (2 ms),
+mcp_message exchanges unchanged. `get_context_usage` now HAS capture
+provenance: the 2.1.252 answer carries `totalTokens`, `maxTokens`,
+`rawMaxTokens`, `percentage`, `categories`, `model` — the typings-derived
+shape below held on the real wire.
 **Provenance:** characterization captures, 2026-08-09
 (untracked `.local/artifacts/characterization-2026-08-09/`:
 leg A initialize + interrupt exchanges, leg B mcp_message + can_use_tool
@@ -60,10 +67,10 @@ under `interrupt_receipt_v1`), `set_permission_mode`,
 
 The response payload's depended-on keys are `totalTokens` and
 `maxTokens` (int); the full shape (categories, gridRows, model, …) is
-per `SDKControlGetContextUsageResponse` in the oracle typings. **No
-capture provenance yet** — the fake scripts this shape; replace both
-with a captured frame when a real one is recorded (the error-result
-fixture carries the same gap).
+per `SDKControlGetContextUsageResponse` in the oracle typings.
+Capture provenance since the 2026-08-31 re-pin (frames in
+`.local/evidence/2026-08-31-s3/stdout.raw`); the fake's scripted values
+remain scripted because totals depend on the caller's own prompt.
 
 ## Cancellation and teardown
 
