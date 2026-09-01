@@ -2,34 +2,35 @@
 
 Claude Code as a [Pi](https://github.com/earendil-works/pi) model provider:
 an in-process TypeScript extension speaking the CLI's documented
-stream-json wire directly — zero runtime dependencies — running on a
+stream-json wire directly (zero runtime dependencies), running on a
 Claude subscription.
 
-Pi stays the harness. The extension runs `claude` as a stripped backend —
-no settings, no vendor scaffolding, a tool surface asserted at startup —
-so Pi owns the system prompt, the tools, and the transcript, and the model
-answers through the subscription the CLI itself authenticates. Successor to
-the [claude-go](../claude-go) bridge and its Pi adapter (ADR 0002 there);
-the session-reconciliation doctrine carries over unchanged
-(`DESIGN.md`, `docs/adr/0001`).
+Pi stays the harness. The extension runs `claude` as a stripped backend
+(no settings, no vendor scaffolding, a tool surface asserted at
+startup), so Pi owns the system prompt, the tools, and the transcript, and the model
+answers through the subscription the CLI itself authenticates. Successor
+to the retired [claude-go](https://github.com/Middlewatch/claude-go)
+bridge and its Pi adapter; the
+session-reconciliation doctrine carries over unchanged (`DESIGN.md`,
+`docs/adr/0001`).
 
-**Status: feature-complete, pre-parity.** Streaming, tool inversion
-(Pi's tools hosted in-process, pause/resume), interrupt, occupancy and
-cost, model/effort/account switches, images, and folding-as-a-no-op are
-built and gated (`docs/specs/2026-08-31-pi-with-claude.md`); the paid
-side-by-side parity demo against the claude-go provider and the npm
-publish are still ahead. Not yet on npm.
+**Status: feature-complete.** Streaming, tool inversion (Pi's tools
+hosted in-process, pause/resume), interrupt, occupancy and cost,
+model/effort/account switches, images, and folding-as-a-no-op are built
+and gated. A paid side-by-side parity demo against the predecessor
+passed on 2026-08-31 and ratified the cutover. Not yet on npm;
+publishing is owner-gated.
 
 ## Use
 
 ```sh
-pi install /path/to/pi-with-claude   # or the git source once published
+pi install git:github.com/Middlewatch/pi-with-claude   # or a local clone's path
 ```
 
 Select provider `pi-with-claude`, model `haiku`, `sonnet`, `opus`, or
-`fable` — the CLI's floating aliases. The real `claude` must be on PATH
+`fable` (the CLI's floating aliases). The real `claude` must be on PATH
 and logged in; the extension never sees a credential. Pi's thinking
-level drives `--effort` (`off` is hidden — the CLI cannot disable
+level drives `--effort` (`off` is hidden because the CLI cannot disable
 reasoning); changing model, effort, tool set, or account reopens the
 session at the cost of a fresh model context.
 
@@ -46,7 +47,7 @@ aims it at the scripted fake).
 - **Not a credential handler.** The spawned `claude` authenticates itself;
   nothing here reads, parses, logs, or forwards a credential (I1).
 - **Not a full-harness backend.** Community adapters run Claude Code as a
-  second harness behind Pi — settings, skills, session persistence. This
+  second harness behind Pi (settings, skills, session persistence). This
   extension strips all of that; running two harnesses double-injects
   scaffolding and double-captures hooks.
 - **Not a client masquerade.** No system-prompt scrubbing, no header or

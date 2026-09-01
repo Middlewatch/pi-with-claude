@@ -231,7 +231,7 @@ function wireContentToPi(blocks: Json[]): Json[] {
 // One user turn on the wire from the sendable suffix: text and image
 // blocks in suffix order, adjacent text newline-merged into one block,
 // an empty merged run dropped (the API rejects empty text). tool_result
-// blocks resolve paused handlers instead (S3) and never ride this.
+// blocks resolve paused handlers instead and never ride this.
 function userContentOf(sendable: Json[]): Json[] {
   const content: Json[] = [];
   let textRun: string[] | null = null;

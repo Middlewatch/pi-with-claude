@@ -1,10 +1,10 @@
-# pi-with-claude — Claude Code as a Pi model provider
+# pi-with-claude: Claude Code as a Pi model provider
 
 An in-process TypeScript Pi extension speaking Claude Code's stream-json
 wire directly (zero runtime dependencies), running `claude` as a stripped
 backend on a Claude subscription.
-`DESIGN.md` is the doctrine home — build only what it or an approved plan
-covers. The owner's plan lane, evidence artifacts, and spikes live in the
+`DESIGN.md` is the doctrine home. Build only what it or an approved
+plan covers. The owner's plan lane, evidence artifacts, and spikes live in the
 untracked `.local/` surround, outside the public tree.
 
 ## The gate
@@ -29,7 +29,7 @@ blocker, never weaken the gate to pass.
   run deliberately, outside the default battery and outside CI, with the
   results recorded as dated evidence in `.local/`.
 - **Honest restart, never replay** (DESIGN.md). Restart semantics follow
-  the frozen `contracts/bridge-v1.md` §prefix-match in the claude-go repo.
+  the frozen `docs/contracts/bridge-v1.md` §prefix-match.
 
 ## Layout
 
@@ -41,4 +41,5 @@ golden wire frames characterized from the real CLI · `docs/contracts/`
 the frozen wire contracts · `docs/specs/` the build spec · `docs/adr/`
 decisions.
 
-`CLAUDE.md` is a tracked symlink to this file — one policy, both harnesses.
+`CLAUDE.md` is a tracked symlink to this file (one policy, both
+harnesses).

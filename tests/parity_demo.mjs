@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-// The parity demo (spec Outcome): the same scripted multi-turn Pi
-// session on the old claude-go provider and on pi-with-claude, compared
-// row by row. NOT part of the gate: `run` drives the REAL `claude` and
-// SPENDS SUBSCRIPTION TOKENS — owner's say-so only, evidence dated into
-// the repo's .local/ surround.
+// The parity demo that ratified the 2026-08-31 cutover: the same
+// scripted multi-turn Pi session on the predecessor claude-go provider
+// and on pi-with-claude, compared row by row (evidence in the repo's
+// untracked .local/parity/). The claude-go rows need that retired
+// provider (github.com/Middlewatch/claude-go) installed; the
+// pi-with-claude side remains
+// runnable as a paid regression demo. NOT part of the gate: `run`
+// drives the REAL `claude` and SPENDS SUBSCRIPTION TOKENS (owner's
+// say-so only, evidence dated into the repo's .local/ surround).
 //
 //   node tests/parity_demo.mjs run claude-go      .local/parity/claude-go
 //   node tests/parity_demo.mjs run pi-with-claude .local/parity/pi-with-claude

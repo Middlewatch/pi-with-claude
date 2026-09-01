@@ -1,5 +1,5 @@
 // The projection-diff/mirror module against the restart taxonomy of
-// bridge-v1 §prefix-match (the port spec, in the claude-go repo):
+// bridge-v1 §prefix-match (docs/contracts/bridge-v1.md):
 // shrunk history, prefix mismatch, stale tool_result, in-flight user
 // content, identity-keyed masks (ADR 0001), precision edges.
 import { test } from "node:test";

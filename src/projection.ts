@@ -3,8 +3,8 @@
 // this is the module the unit tests drive.
 //
 // The neutral schema and the restart taxonomy are specified by
-// claude-go's contracts/bridge-v1.md (the port spec); the identity-keyed
-// diff is ADR 0001. Ported 2026-08-31 from claude-go adapters/pi/
+// docs/contracts/bridge-v1.md; the identity-keyed diff is ADR 0001.
+// Ported 2026-08-31 from the retired claude-go's adapters/pi/
 // extension.ts, where every branch below was proven in production.
 
 type Json = any;

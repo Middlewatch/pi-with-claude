@@ -4,14 +4,15 @@
 Provenance: copied 2026-08-31 from claude-go tests/fake_claude.py
 (characterized against the real `claude` 2.1.226 there); the fixtures
 under ../fixtures travelled with it. In this repo the client on the
-other end of the wire is the Claude Agent SDK, not the claude-go
-binary; dialect drift found while characterizing the SDK is fixed
-here, with the delta noted against the claude-go original.
+other end of the wire is the native bridge (src/bridge.ts); dialect
+drift found while characterizing the real CLI is fixed here, with the
+delta noted against the claude-go original.
 
 Replays frames characterized from the real `claude` 2.1.226 so the library
 under test sees the real wire with no token spent and no `claude`
-installed. The library never special-cases this script: Options.ClaudePath
-points straight at it and it is spawned with the real argv.
+installed. The library never special-cases this script: the bridge's
+claudePath option points straight at it and it is spawned with the
+real argv.
 
 Wire behaviour, matching the characterization:
   - nothing is emitted before input;
