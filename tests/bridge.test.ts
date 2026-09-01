@@ -89,6 +89,11 @@ test("buildArgs emits the pinned contract argv", () => {
   const i = withEffort.indexOf("--effort");
   assert.ok(i > 0 && withEffort[i + 1] === "xhigh");
   assert.ok(i < withEffort.indexOf("--include-partial-messages"), "effort sits before the trailing flags (pinned order)");
+  // An unknown level is refused before a spawn, per spawn-args.md.
+  assert.throws(
+    () => new Bridge({ model: "haiku", systemPrompt: "", effort: "turbo", tools: [], claudePath: "/bin/false" }),
+    /unknown effort/,
+  );
 });
 
 test("mcp handler speaks the pinned dialect", async () => {

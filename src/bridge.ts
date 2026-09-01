@@ -136,6 +136,11 @@ const CLOSE_STDIN_GRACE_MS = 2000;
 const CLOSE_KILL_GRACE_MS = 5000;
 const INITIALIZE_TIMEOUT_MS = 30000; // the real CLI answers in <20 ms
 
+// The --effort levels the pinned CLI accepts (spawn-args.md); "" leaves
+// the CLI default. Validated before spawn: an unknown level is a caller
+// bug worth catching here, not a child exiting with a usage error.
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+
 export class Bridge {
   // Resolves when the initialize control exchange completed; a failure
   // is fatal to the session and also surfaces as __closed on read().
@@ -166,6 +171,11 @@ export class Bridge {
   private mcp: ((msg: Json) => Promise<Json>) | null;
 
   constructor(opts: BridgeOptions) {
+    if (opts.effort && !EFFORT_LEVELS.includes(opts.effort)) {
+      throw new Error(
+        `pi-with-claude bridge: unknown effort ${JSON.stringify(opts.effort)} (want one of ${EFFORT_LEVELS.join(", ")}, or "")`,
+      );
+    }
     this.mcp =
       opts.tools.length > 0 && opts.onToolCall ? makeMcpHandler(opts.tools, opts.onToolCall) : null;
 
@@ -193,6 +203,7 @@ export class Bridge {
     });
     this.child.on("error", (e: Error) => this.fatal(`spawning ${path}: ${e.message}`));
     this.child.on("close", (code, signal) => {
+      this.pump("\n"); // flush an unterminated final line before the stream ends
       // A signal exit during our own teardown is a successful close.
       const failed = !this.closed && code !== 0;
       const detail = signal ? `signal ${signal}` : `exit ${code}`;
@@ -314,6 +325,9 @@ export class Bridge {
       this.inflight.delete(requestId);
       this.writeLine({ type: "control_response", response: { request_id: requestId, ...resp } });
     };
+    // Cancellation settles the exchange at the control layer, which is
+    // all the wire sees; a tools/call left parked in the host is stale
+    // state the restart taxonomy already answers (bridge-v1 §prefix-match).
     this.inflight.set(requestId, () => respond({ subtype: "error", error: "cancelled" }));
 
     if (request.subtype === "mcp_message" && this.mcp) {
@@ -352,14 +366,25 @@ export class Bridge {
     return (this.child.stdin.write(JSON.stringify(frame) + "\n"), true);
   }
 
-  // The pinned stdin user frame (spawn-args.md §Stdin user frame).
+  // The pinned stdin user frame (spawn-args.md §Stdin user frame),
+  // queued behind the initialize response (the contract's ordering: the
+  // exchange completes before any user input). Chaining on one settled
+  // promise keeps multiple turns in send order; a failed write on a
+  // live child is fatal — a session that cannot be written to must end
+  // as __closed, never hang a turn.
   pushUser(content: Json[]) {
-    this.writeLine({
-      type: "user",
-      session_id: "",
-      message: { role: "user", content },
-      parent_tool_use_id: null,
-    });
+    this.initialized.then(
+      () => {
+        const ok = this.writeLine({
+          type: "user",
+          session_id: "",
+          message: { role: "user", content },
+          parent_tool_use_id: null,
+        });
+        if (!ok && !this.closed) this.fatal("writing user frame failed");
+      },
+      () => {}, // an initialize failure already went fatal
+    );
   }
 
   // ------------------------------------------------------------------
@@ -386,6 +411,10 @@ export class Bridge {
     const cause = new Error(error ?? "bridge closed");
     for (const p of this.pending.values()) p.reject(cause);
     this.pending.clear();
+    // In-flight incoming handlers are settled with their error response
+    // (a no-op write on a dead pipe) so nothing lingers past the end.
+    for (const cancel of this.inflight.values()) cancel();
+    this.inflight.clear();
   }
 
   private fatal(message: string) {
