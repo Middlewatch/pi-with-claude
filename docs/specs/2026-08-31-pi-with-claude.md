@@ -130,7 +130,9 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
       no-op verified against a folding extension. (after S3)
 - [ ] S8 Parity demo + paid characterization + cutover; then the
       owner-gated npm publish after a public-release sweep. (after
-      S4–S7)
+      S4–S7) — 2026-08-31: absorbed as S4 of
+      `2026-08-31-native-bridge.md` (ADR 0002 replaced the SDK
+      transport before this landed).
 
 ## Open questions
 
