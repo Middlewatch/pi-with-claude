@@ -1,6 +1,8 @@
 # pi-with-claude
 
-Date: 2026-08-31   Status: building
+Date: 2026-08-31   Status: done (superseded — runtime shape replaced by
+`2026-08-31-native-bridge.md` per ADR 0002; the npm publish remains
+owner-gated and tracked there)
 
 Successor to the claude-go bridge + Pi adapter, per ADR 0002. This spec
 lives here in the predecessor repo until S1 scaffolds the new one, then
@@ -128,11 +130,12 @@ Prior art: `tests/conformance_bridge.py` scenarios (restart taxonomy),
       (after S3)
 - [x] S7 Images and folding: image blocks down the wire, ADR 0001
       no-op verified against a folding extension. (after S3)
-- [ ] S8 Parity demo + paid characterization + cutover; then the
+- [x] S8 Parity demo + paid characterization + cutover; then the
       owner-gated npm publish after a public-release sweep. (after
       S4–S7) — 2026-08-31: absorbed as S4 of
       `2026-08-31-native-bridge.md` (ADR 0002 replaced the SDK
-      transport before this landed).
+      transport before this landed) and delivered there the same day;
+      the npm publish stays owner-gated.
 
 ## Open questions
 

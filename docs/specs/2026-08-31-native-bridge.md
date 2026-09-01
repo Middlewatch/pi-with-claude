@@ -1,6 +1,6 @@
 # native-bridge
 
-Date: 2026-08-31   Status: draft
+Date: 2026-08-31   Status: done (publish steps remain owner-gated)
 
 Successor transport for this extension, per ADR 0002. Supersedes the
 runtime-shape decision of `2026-08-31-pi-with-claude.md` (SDK-based);
@@ -100,10 +100,12 @@ gate, or a surviving runtime dependency falsifies the claim.
       version, billing proof with Pi's default prompt (plan limits, no
       third-party 400), floor and cache behavior re-measured, dated
       evidence. (after S2)
-- [ ] S4 Parity demo against the claude-go provider + cutover: old
+- [x] S4 Parity demo against the claude-go provider + cutover: old
       adapter symlink retired, predecessor spec closed out, claude-go
       freeze note. Owner-gated publish steps remain owner-gated.
-      (after S3)
+      (after S3) — evidence `.local/parity/`; claude-go package retired
+      from pi settings, defaultProvider cut over, freeze note committed
+      locally in claude-go (unpushed).
 
 ## Open questions
 
