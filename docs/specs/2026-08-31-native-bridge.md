@@ -89,7 +89,7 @@ gate, or a surviving runtime dependency falsifies the claim.
 
 ## Slices
 
-- [ ] S1 Bridge module complete against the fake: contracts copied in
+- [x] S1 Bridge module complete against the fake: contracts copied in
       with provenance, `bridge.ts` (spawn, initialize, tolerant read
       pump, user frames, native MCP dialect, interrupt, usage), driver
       tests green. Extension untouched.
