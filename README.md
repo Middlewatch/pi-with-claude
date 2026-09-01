@@ -1,9 +1,9 @@
 # pi-with-claude
 
 Claude Code as a [Pi](https://github.com/earendil-works/pi) model provider:
-an in-process TypeScript extension on the vendor
-[Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript),
-running on a Claude subscription.
+an in-process TypeScript extension speaking the CLI's documented
+stream-json wire directly — zero runtime dependencies — running on a
+Claude subscription.
 
 Pi stays the harness. The extension runs `claude` as a stripped backend —
 no settings, no vendor scaffolding, a tool surface asserted at startup —
@@ -38,7 +38,7 @@ CLI authenticates as (an account is a `CLAUDE_CONFIG_DIR`; log one in
 with `CLAUDE_CONFIG_DIR=~/.claude-<name> claude auth login`).
 `PI_WITH_CLAUDE_ACCOUNTS` pins the roster, `PI_WITH_CLAUDE_ACCOUNT`
 pins the choice, `PI_WITH_CLAUDE_DEBUG=<path>` traces seam events, and
-`PI_WITH_CLAUDE_CLAUDE` points the SDK at another `claude` (the gate
+`PI_WITH_CLAUDE_CLAUDE` points the bridge at another `claude` (the gate
 aims it at the scripted fake).
 
 ## What this is not

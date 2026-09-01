@@ -7,7 +7,7 @@ covers.
 ## Invariants
 
 - **I1 — Never touch credentials** (2026-08-09). The extension spawns
-  `claude` (through the Agent SDK) and lets it authenticate. It does not
+  `claude` and lets it authenticate. It does not
   read, parse, forward, or persist credential files, keychain entries, or
   OAuth tokens. Selecting *which* identity the child uses is done only
   through the child's environment (`CLAUDE_CONFIG_DIR`), never by handling
@@ -41,6 +41,8 @@ covers.
   masks of absorbed content — a tool_result's content or a thinking
   block's text folded to a digest — diff as already-absorbed history.
   Folding is a no-op on this transport.
-- **The SDK pin is exact.** The event schema moves ~25 CLI releases a
-  month; wire drift is tracked by the vendor's SDK releases. A version
-  bump is a deliberate commit with its own verification, never ambient.
+- **The wire is pinned to a named CLI oracle.** The event schema moves
+  ~25 CLI releases a month; `docs/contracts/` records the exact `claude`
+  version each surface was characterized against. A re-pin is a
+  deliberate, dated characterization against a real CLI with its own
+  commit and evidence in `.local/` — never an ambient bump.

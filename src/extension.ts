@@ -1,24 +1,23 @@
 // Pi extension: Claude Code as a Pi model provider, in-process on the
-// Claude Agent SDK. Pi owns the harness — system prompt, tools,
-// transcript; the extension runs `claude` as a stripped backend
-// (DESIGN.md): `tools: []`, `settingSources: []`, string systemPrompt,
-// the init tool surface asserted (I6). Pi's projected context goes out
-// as SDK turns; SDK messages come back as Pi's assistant-message event
-// stream. The extension's durable state is a mirror of what the live
-// session has absorbed (src/projection.ts), so its projection is
-// prefix-stable by construction whatever order Pi keeps its own context
-// in; irreconcilable history takes the honest restart, never a replay.
+// native stream-json bridge (src/bridge.ts, ADR 0002). Pi owns the
+// harness — system prompt, tools, transcript; the extension runs
+// `claude` as a stripped backend (DESIGN.md): no builtin tools, no
+// setting sources, the init tool surface asserted (I6). Pi's projected
+// context goes out as wire turns; wire frames come back as Pi's
+// assistant-message event stream. The extension's durable state is a
+// mirror of what the live session has absorbed (src/projection.ts), so
+// its projection is prefix-stable by construction whatever order Pi
+// keeps its own context in; irreconcilable history takes the honest
+// restart, never a replay.
 //
-// The real `claude` resolves through the SDK's own discovery;
-// PI_WITH_CLAUDE_CLAUDE points it at a scripted fake in the gate.
+// The real `claude` resolves from PATH; PI_WITH_CLAUDE_CLAUDE points
+// the bridge at a scripted fake in the gate.
 //
 // Runs under node's type stripping (node >= 22.18): runtime imports are
-// node builtins, our own siblings, and the Agent SDK — never the Pi
-// packages (type-only).
+// node builtins and our own siblings — never the Pi packages
+// (type-only), and no third-party dependency at all.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import { spawn, type ChildProcess } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import {
   assistantBlocks,
@@ -33,7 +32,7 @@ import {
   projectTools,
   wireNames,
 } from "./projection.ts";
-import { makeToolServer, type ToolCallRequest } from "./tools.ts";
+import { Bridge, type ToolCallRequest } from "./bridge.ts";
 import { accounts, ambient, pinned, selectAccount, selected } from "./accounts.ts";
 
 type Json = any;
@@ -81,15 +80,12 @@ export function makeEventStream() {
 }
 
 // ---------------------------------------------------------------------
-// The SDK session and its mirror.
+// One live claude child, driven over the bridge, and its mirror.
 
 class Session {
-  q: Json;
-  child: ChildProcess | null = null;
-  msgs: Json[] = [];
-  waiters: ((m: Json) => void)[] = [];
+  bridge: Bridge;
   closed = false;
-  busy = false; // one streamSimple at a time: msgs/waiters are one shared FIFO
+  busy = false; // one streamSimple at a time: the bridge FIFO is shared
   modelId: string; // pinned at open; a swap forces a reopen
   effort: string; // pinned at open (argv-scoped); a change forces a reopen
   toolsSig: string; // registered tool set, pinned by the MCP handshake; drift forces a reopen
@@ -113,9 +109,6 @@ class Session {
   parkedById = new Map<string, ToolCallRequest>();
   parkedUnbound: ToolCallRequest[] = [];
 
-  private queue: Json[] = [];
-  private wake: (() => void) | null = null;
-
   constructor(cfg: {
     model: string;
     systemPrompt: string;
@@ -128,129 +121,61 @@ class Session {
     this.effort = cfg.effort;
     this.toolsSig = cfg.toolsSig;
     this.configDir = cfg.configDir;
-    const self = this;
-    async function* prompt() {
-      for (;;) {
-        while (self.queue.length) yield self.queue.shift();
-        if (self.closed) return;
-        await new Promise<void>((r) => (self.wake = r));
-      }
-    }
-    const options: Json = {
+    this.bridge = new Bridge({
       model: cfg.model,
       systemPrompt: cfg.systemPrompt,
-      // The Pipe profile (DESIGN.md): stripped backend, no vendor
-      // builtins, no settings tree. Spike-proven floor: ~1,280 input
-      // tokens for the first call.
-      tools: [],
-      settingSources: [],
-      // Without an unconditional allow the CLI's own permission layer
-      // silently denies in-process MCP calls before the handler runs
-      // (spike finding). Pi owns gating; nothing to gate here.
-      canUseTool: async (_name: string, input: Json) => ({ behavior: "allow", updatedInput: input }),
-      includePartialMessages: true,
+      effort: cfg.effort,
+      tools: projectTools(cfg.tools),
+      onToolCall: (req) => {
+        if (this.closed) {
+          // A dispatch racing the teardown parks nowhere: reject it
+          // now, since cancelParked already ran.
+          req.reject(new Error("pi-with-claude: session closed with a tool call in flight"));
+          return;
+        }
+        if (req.toolUseId) this.parkedById.set(req.toolUseId, req);
+        else this.parkedUnbound.push(req);
+        // Wake the turn loop as a frame so the pause condition is
+        // re-checked the moment a handler parks.
+        this.bridge.deliver({ type: "__tool_parked", id: req.toolUseId, name: req.name });
+      },
       // The account rides the child's environment: CLAUDE_CONFIG_DIR
       // selects which subscription `claude` authenticates as (I1: the
       // variable, never a credential). null keeps the ambient
       // environment — the pre-account behaviour.
-      env: cfg.configDir ? { ...process.env, CLAUDE_CONFIG_DIR: cfg.configDir } : { ...process.env },
-      // Own the child spawn so the session cannot hold the host's event
-      // loop open between turns: Pi's -p mode ends when the loop
-      // drains, and stdin EOF is the CLI's own close signal, so orphan
-      // cleanup is inherent. ref()/unref() below re-arm stdout only
-      // while a turn is in flight.
-      spawnClaudeCodeProcess: (se: Json) => {
-        const child = spawn(se.command, se.args, {
-          cwd: se.cwd,
-          stdio: ["pipe", "pipe", "pipe"],
-          env: se.env,
-          signal: se.signal,
-        });
-        // Stdio pipes are Socket at runtime (ref/unref exist); the
-        // Writable/Readable typings just don't carry them.
-        child.unref();
-        (child.stdin as Json)?.unref?.();
-        (child.stdout as Json)?.unref?.();
-        (child.stderr as Json)?.unref?.();
-        this.child = child;
-        return child;
-      },
-    };
-    if (cfg.effort) options.effort = cfg.effort;
-    if (cfg.tools.length > 0) {
-      options.mcpServers = {
-        [MCP_SERVER]: {
-          type: "sdk",
-          name: MCP_SERVER,
-          instance: makeToolServer(cfg.tools, (req) => {
-            if (this.closed) {
-              // A dispatch racing the teardown parks nowhere: reject it
-              // now, since cancelParked already ran.
-              req.reject(new Error("pi-with-claude: session closed with a tool call in flight"));
-              return;
-            }
-            if (req.toolUseId) this.parkedById.set(req.toolUseId, req);
-            else this.parkedUnbound.push(req);
-            // Wake the turn loop as a frame so the pause condition is
-            // re-checked the moment a handler parks.
-            this.deliver({ type: "__tool_parked", id: req.toolUseId, name: req.name });
-          }),
-        },
-      };
-    }
-    if (process.env.PI_WITH_CLAUDE_CLAUDE) options.pathToClaudeCodeExecutable = process.env.PI_WITH_CLAUDE_CLAUDE;
-    this.q = query({ prompt: prompt(), options });
-    // The pump: every SDK message lands in one FIFO the current turn
-    // reads from; the stream ending (or throwing) marks the session
-    // dead and answers every present and future read with __closed, so
-    // no turn — this one or a later one — can hang on a spent stream.
-    (async () => {
-      let error: string | undefined;
-      try {
-        for await (const m of this.q) this.deliver(m);
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
-      }
-      this.streamEnd = { type: "__closed", ...(error ? { error } : {}) };
-      this.closed = true;
-      for (const w of this.waiters.splice(0)) w(this.streamEnd);
-    })();
-  }
-
-  private streamEnd: Json | null = null;
-
-  private deliver(m: Json) {
-    const w = this.waiters.shift();
-    if (w) w(m);
-    else this.msgs.push(m);
+      env: cfg.configDir ? { CLAUDE_CONFIG_DIR: cfg.configDir } : {},
+    });
   }
 
   read(): Promise<Json> {
-    const m = this.msgs.shift();
-    if (m !== undefined) return Promise.resolve(m);
-    if (this.streamEnd) return Promise.resolve(this.streamEnd);
-    return new Promise((r) => this.waiters.push(r));
+    return this.bridge.read();
   }
 
   pushUser(content: Json[]) {
-    this.queue.push({ type: "user", message: { role: "user", content }, parent_tool_use_id: null });
-    this.wake?.();
-    this.wake = null;
+    this.bridge.pushUser(content);
+  }
+
+  interrupt(): Promise<void> {
+    return this.bridge.interrupt();
+  }
+
+  getContextUsage(): Promise<Json> {
+    return this.bridge.getContextUsage();
   }
 
   // The event loop holds only while a turn is in flight: ref on entry,
   // unref when the stream settles, so a host like `pi -p` can exit the
   // moment it is done while an awaiting caller is never starved.
   ref() {
-    (this.child?.stdout as Json)?.ref?.();
+    this.bridge.ref();
   }
 
   unref() {
-    (this.child?.stdout as Json)?.unref?.();
+    this.bridge.unref();
   }
 
   dead(): boolean {
-    return this.closed || (this.child !== null && this.child.exitCode !== null);
+    return this.closed || this.bridge.dead();
   }
 
   // Cancel every parked handler so nothing hangs across a restart or
@@ -266,11 +191,7 @@ class Session {
   close() {
     this.closed = true;
     this.cancelParked("pi-with-claude: session closed with a tool call in flight");
-    this.wake?.();
-    this.wake = null;
-    try {
-      this.q.close?.();
-    } catch {}
+    this.bridge.close();
   }
 }
 
@@ -287,13 +208,13 @@ const currentAccount = (): string | null =>
   activeAccount === undefined ? (activeAccount = selected()) : activeAccount;
 
 // ---------------------------------------------------------------------
-// Wire translation at the SDK boundary.
+// Wire translation at the claude boundary.
 
-// SDK assistant content (Anthropic shape) -> Pi assistant content.
+// Wire assistant content (Anthropic shape) -> Pi assistant content.
 // Tool calls surface under their PLAIN names — Pi's tool registry knows
 // "read", not "mcp__pi__read" — with the wire form remembered for the
 // projection round trip.
-function sdkContentToPi(blocks: Json[]): Json[] {
+function wireContentToPi(blocks: Json[]): Json[] {
   const out: Json[] = [];
   for (const b of blocks) {
     if (b.type === "text") out.push({ type: "text", text: b.text ?? "" });
@@ -479,7 +400,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // result below and is mapped back to Pi's aborted stop.
       onAbort = () => {
         debug("interrupt requested");
-        session?.q.interrupt?.().catch(() => {});
+        session?.interrupt().catch(() => {});
       };
       options?.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -660,7 +581,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           // A turn that never streamed thinking stays honestly empty —
           // nothing is invented.
           const streamedThinking = output.content.filter((c: Json) => c.type === "thinking");
-          output.content = sdkContentToPi(turnBlocks);
+          output.content = wireContentToPi(turnBlocks);
           let ti = 0;
           for (const c of output.content) {
             if (c.type !== "thinking") continue;
@@ -747,7 +668,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           // estimate of last resort. Booked as cache read because that
           // is what it is — the prompt lives in the CLI's session, not
           // in tokens Pi sent this turn.
-          const cu = await s.q.getContextUsage?.().catch(() => null);
+          const cu = await s.getContextUsage().catch(() => null);
           const aggregate = frame.usage
             ? (frame.usage.input_tokens ?? 0) +
               (frame.usage.output_tokens ?? 0) +
@@ -816,7 +737,7 @@ export default function (pi: ExtensionAPI) {
     name: "Claude Code (pi-with-claude)",
     // Placeholders: the spawned claude authenticates itself (I1);
     // nothing is ever sent to this URL or with this key.
-    baseUrl: "sdk://pi-with-claude",
+    baseUrl: "spawn://pi-with-claude",
     apiKey: "unused-the-spawned-claude-authenticates-itself",
     api: "pi-with-claude",
     // Floating CLI aliases (`claude --help`): each id tracks the latest

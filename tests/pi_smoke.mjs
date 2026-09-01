@@ -3,7 +3,7 @@
 //
 // Two tiers in one file:
 //   - REAL-PI phases: spawn the installed `pi -p` with the extension
-//     loaded and the Agent SDK pointed at tests/fake_claude.py, then
+//     loaded and the bridge pointed at tests/fake_claude.py, then
 //     assert on Pi's output, the extension's debug trace, and the
 //     fake's stdin log (the wire witness).
 //   - STUB-API phases (child processes of this file, one per scenario
@@ -12,7 +12,8 @@
 //     seeded resumes, stale tool results, regression fixtures.
 //
 // Ported from claude-go's tests/pi_smoke.mjs; the stub-API scenarios
-// carry over, the real-pi tier is new with the SDK rebuild.
+// carry over, the real-pi tier arrived with the SDK rebuild and rides
+// the native bridge unchanged — the same wire from a different client.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -253,8 +254,9 @@ if (phase === "--steering") {
 
 if (phase === "--init-surface") {
   // I6 negative drill: a claude advertising a tool nobody requested
-  // (fake_claude --advertise-extra-tool, via a wrapper since the SDK
-  // owns the argv) must fail the turn, not stream on a lying surface.
+  // (fake_claude --advertise-extra-tool, via a wrapper since the
+  // bridge owns the argv) must fail the turn, not stream on a lying
+  // surface.
   const { writeFileSync, mkdtempSync: mkTmp, chmodSync } = await import("node:fs");
   const wrapDir = mkTmp(join(tmpdir(), "pwc-wrap-"));
   const wrapper = join(wrapDir, "claude-extra-tool");
@@ -627,7 +629,7 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
   if (!argv.some((a) => a.startsWith("--setting-sources="))) fail(`--setting-sources= not in fake argv: ${argv.join(" ")}`);
 
   // The initialize handshake carried Pi's system prompt (string,
-  // wrapped by the SDK into a one-element array) — never a preset.
+  // wrapped by the bridge into a one-element array) — never a preset.
   const init = wire.find((o) => o.type === "control_request" && o.request?.subtype === "initialize");
   if (!init) fail("no initialize control request reached the fake");
   const sp = init.request.systemPrompt;

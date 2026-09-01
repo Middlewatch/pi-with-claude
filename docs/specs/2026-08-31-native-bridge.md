@@ -93,7 +93,7 @@ gate, or a surviving runtime dependency falsifies the claim.
       with provenance, `bridge.ts` (spawn, initialize, tolerant read
       pump, user frames, native MCP dialect, interrupt, usage), driver
       tests green. Extension untouched.
-- [ ] S2 The swap: `extension.ts` onto the bridge, permission seam
+- [x] S2 The swap: `extension.ts` onto the bridge, permission seam
       dropped, both runtime deps removed, DESIGN.md pin invariant
       rewritten, smoke and full gate green. (after S1)
 - [ ] S3 Paid characterization: re-pin contracts to the tested CLI
