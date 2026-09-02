@@ -12,15 +12,16 @@ import {
   keyOf,
   plainToolName,
   projectMessages,
+  type Message,
 } from "../src/projection.ts";
 
-const user = (text: string) => ({ role: "user", blocks: [{ type: "text", text }] });
-const asst = (text: string) => ({ role: "assistant", blocks: [{ type: "text", text }] });
-const toolRes = (id: string, text: string, isError = false) => ({
+const user = (text: string): Message => ({ role: "user", blocks: [{ type: "text", text }] });
+const asst = (text: string): Message => ({ role: "assistant", blocks: [{ type: "text", text }] });
+const toolRes = (id: string, text: string, isError = false): Message => ({
   role: "user",
   blocks: [{ type: "tool_result", call_id: id, content: [{ type: "text", text }], is_error: isError }],
 });
-const thinking = (text: string) => ({ role: "assistant", blocks: [{ type: "thinking", text }] });
+const thinking = (text: string): Message => ({ role: "assistant", blocks: [{ type: "thinking", text }] });
 const noDrops = new Map<string, number>();
 
 test("absorbed history echoed back is not fresh", () => {
@@ -97,16 +98,16 @@ test("in-flight classification: user content vs completions", () => {
   assert.equal(isUserContent(user("steer")), true);
   assert.equal(isUserContent(toolRes("t1", "5")), false);
   assert.equal(hasToolResult(toolRes("t1", "5")), true);
-  const mixed = { role: "user", blocks: [...toolRes("t1", "5").blocks, { type: "text", text: "and also" }] };
+  const mixed: Message = { role: "user", blocks: [...toolRes("t1", "5").blocks, { type: "text", text: "and also" }] };
   assert.equal(isUserContent(mixed), true);
   assert.equal(hasToolResult(mixed), true);
 });
 
 test("numeric identity follows JSON structural equality (1 == 1.0)", () => {
-  const a = { role: "assistant", blocks: [{ type: "tool_call", id: "t", name: "n", input: { a: 1 } }] };
-  const b = { role: "assistant", blocks: [{ type: "tool_call", id: "t", name: "n", input: { a: 1.0 } }] };
+  const a: Message = { role: "assistant", blocks: [{ type: "tool_call", id: "t", name: "n", input: { a: 1 } }] };
+  const b: Message = { role: "assistant", blocks: [{ type: "tool_call", id: "t", name: "n", input: { a: 1.0 } }] };
   assert.equal(keyOf(a), keyOf(b));
-  const c = { role: "assistant", blocks: [{ type: "tool_call", id: "t", name: "n", input: { a: 2 } }] };
+  const c: Message = { role: "assistant", blocks: [{ type: "tool_call", id: "t", name: "n", input: { a: 2 } }] };
   assert.notEqual(keyOf(a), keyOf(c));
 });
 

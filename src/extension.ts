@@ -31,6 +31,7 @@ import {
   wireToolName,
 } from "./projection.ts";
 import { Bridge, type ToolCallRequest } from "./bridge.ts";
+import type { Message } from "./projection.ts";
 import { accounts, ambient, pinned, selectAccount, selected } from "./accounts.ts";
 
 type Json = any;
@@ -91,7 +92,7 @@ class Session {
   // The mirror: every neutral message the live session has absorbed, in
   // absorption order — accepted suffixes verbatim, then each turn's
   // assistant message as Pi will hand it back.
-  noted: Json[] = [];
+  noted: Message[] = [];
   // History deliberately never sent (resumed sessions, fresh-start
   // trims): subtracted from every diff so it is not re-flagged as new.
   dropped = new Map<string, number>();
@@ -209,7 +210,7 @@ function wireContentToPi(blocks: Json[]): Json[] {
 // blocks in suffix order, adjacent text newline-merged into one block,
 // an empty merged run dropped (the API rejects empty text). tool_result
 // blocks resolve paused handlers instead and never ride this.
-function userContentOf(sendable: Json[]): Json[] {
+function userContentOf(sendable: Message[]): Json[] {
   const content: Json[] = [];
   let textRun: string[] | null = null;
   const flush = () => {
@@ -425,7 +426,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       options?.signal?.addEventListener("abort", onAbort, { once: true });
 
       const candidate = projectMessages(context.messages);
-      let sendable: Json[] = [];
+      let sendable: Message[] = [];
       let freshStarted = false; // a fresh session was forced; only trailing user input can ride it
 
       // takeFreshStart resets the session bookkeeping to what a
@@ -450,7 +451,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         debug("absorbed history rewritten by host: reopening session");
         s = swapSession();
         takeFreshStart();
-      } else if (fresh.some((m: Json) => m.role !== "user")) {
+      } else if (fresh.some((m) => m.role !== "user")) {
         // Fresh content no suffix can carry (assistant history): a
         // resumed Pi session on a new process, or a foreign assistant
         // message injected mid-session.
@@ -466,7 +467,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         // While a model turn is paused on tool calls, only completions
         // may go down; steering text is withheld and — being absent
         // from the mirror — resurfaces as fresh suffix next call.
-        sendable = fresh.filter((m: Json) => !isUserContent(m));
+        sendable = fresh.filter((m) => !isUserContent(m));
         if (sendable.length < fresh.length) debug("withheld", fresh.length - sendable.length, "steering message(s)");
       } else {
         sendable = fresh;
@@ -487,8 +488,8 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       // the honest restart with nothing applied.
       let resumed = false;
       if (s.inFlight && sendable.length > 0) {
-        const completions = sendable.flatMap((m: Json) => m.blocks.filter((b: Json) => b.type === "tool_result"));
-        const missing = completions.filter((c: Json) => !s!.parkedById.has(c.call_id));
+        const completions = sendable.flatMap((m) => m.blocks.filter((b) => b.type === "tool_result"));
+        const missing = completions.filter((c) => !s!.parkedById.has(c.call_id));
         if (missing.length > 0) {
           debug("unclaimable tool_result on the paused turn: reopening session");
           s = swapSession();

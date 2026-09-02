@@ -9,6 +9,16 @@
 
 type Json = any;
 
+// The neutral schema (bridge-v1.md §Message): what the mirror notes and
+// what Pi's history projects to, so the two diff by construction.
+export type Block =
+  | { type: "text"; text: string }
+  | { type: "image"; media_type: string; data: string }
+  | { type: "thinking"; text: string }
+  | { type: "tool_call"; id: string; name: string; input: unknown }
+  | { type: "tool_result"; call_id: string; content: unknown[]; is_error: boolean };
+export type Message = { role: "user" | "assistant"; blocks: Block[] };
+
 // The in-process MCP server every Pi tool is hosted under. Pi executes
 // tools by its own registry names, so Pi-facing content carries the
 // plain name and the projection restores the wire form.
@@ -27,7 +37,7 @@ export function plainToolName(wire: string): string {
 // identical by construction (deriving the mirror from wire frames
 // instead made them agree only by coincidence — the claude-go
 // empty-thinking regression).
-export function assistantBlocks(content: Json[]): Json[] {
+export function assistantBlocks(content: Json[]): Block[] {
   return content.map((c: Json) =>
     c.type === "text"
       ? { type: "text", text: c.text }
@@ -37,11 +47,11 @@ export function assistantBlocks(content: Json[]): Json[] {
   );
 }
 
-export function projectMessages(messages: Json[]): Json[] {
-  const out: Json[] = [];
+export function projectMessages(messages: Json[]): Message[] {
+  const out: Message[] = [];
   for (const m of messages) {
     if (m.role === "user") {
-      const blocks =
+      const blocks: Block[] =
         typeof m.content === "string"
           ? [{ type: "text", text: m.content }]
           : m.content
@@ -83,10 +93,10 @@ export function projectMessages(messages: Json[]): Json[] {
 // already-absorbed history — no fresh session, no restart (ADR 0001). Set
 // changes (messages added, removed, replaced — branch navigation,
 // compaction) still diff as before.
-export const keyOf = (msg: Json) =>
+export const keyOf = (msg: Message) =>
   JSON.stringify({
     role: msg.role,
-    blocks: msg.blocks.map((b: Json) =>
+    blocks: msg.blocks.map((b) =>
       b.type === "tool_result"
         ? { type: b.type, call_id: b.call_id, is_error: b.is_error }
         : b.type === "thinking"
@@ -104,17 +114,17 @@ export const keyOf = (msg: Json) =>
 // §prefix-match: Pi does not reorder, and a reordered history would
 // surface as "nothing new to run", never as a replay.
 export function diffNew(
-  candidate: Json[],
-  noted: Json[],
+  candidate: Message[],
+  noted: Message[],
   dropped: Map<string, number>,
-): { fresh: Json[]; deleted: boolean } {
+): { fresh: Message[]; deleted: boolean } {
   const notedCounts = new Map<string, number>();
   for (const m of noted) {
     const k = keyOf(m);
     notedCounts.set(k, (notedCounts.get(k) ?? 0) + 1);
   }
   const droppedCounts = new Map(dropped);
-  const fresh: Json[] = [];
+  const fresh: Message[] = [];
   for (const m of candidate) {
     const k = keyOf(m);
     if ((notedCounts.get(k) ?? 0) > 0) {
@@ -136,10 +146,10 @@ export function diffNew(
 // a fresh session, and an unclaimable tool_result would fail the turn).
 // Everything cut away is returned as the dropped ledger, so the next
 // diff never re-flags it as new.
-export function freshStart(candidate: Json[]): { sendable: Json[]; dropped: Map<string, number> } {
+export function freshStart(candidate: Message[]): { sendable: Message[]; dropped: Map<string, number> } {
   let cut = candidate.length;
   while (cut > 0 && candidate[cut - 1].role === "user") cut--;
-  while (cut < candidate.length && candidate[cut].blocks.every((b: Json) => b.type === "tool_result")) cut++;
+  while (cut < candidate.length && candidate[cut].blocks.every((b) => b.type === "tool_result")) cut++;
   const dropped = new Map<string, number>();
   for (const m of candidate.slice(0, cut)) {
     const k = keyOf(m);
@@ -148,9 +158,9 @@ export function freshStart(candidate: Json[]): { sendable: Json[]; dropped: Map<
   return { sendable: candidate.slice(cut), dropped };
 }
 
-export const isUserContent = (m: Json) => m.blocks.some((b: Json) => b.type === "text" || b.type === "image");
+export const isUserContent = (m: Message) => m.blocks.some((b) => b.type === "text" || b.type === "image");
 
-export const hasToolResult = (m: Json) => m.blocks.some((b: Json) => b.type === "tool_result");
+export const hasToolResult = (m: Message) => m.blocks.some((b) => b.type === "tool_result");
 
 // Neutral tool descriptors: the session-identity signature (a drifted
 // set forces a reopen) and the shape the MCP server advertises.
