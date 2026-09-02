@@ -748,7 +748,10 @@ export default function (pi: ExtensionAPI) {
     // contextWindow is the CLI's OWN rawMaxTokens for that alias,
     // measured token-free against claude 2.1.252 on 2026-08-31
     // (get_context_usage over the bridge on a session that never sends
-    // a user message; .local/evidence/2026-08-31-s3/windows.txt). The
+    // a user message; .local/evidence/2026-08-31-s3/windows.txt) and
+    // re-confirmed unchanged against 2.1.258 on 2026-09-01, where the
+    // fable alias began resolving to claude-fable-5-1
+    // (.local/evidence/2026-09-01-repin-2.1.258/windows.txt). The
     // CLI is what actually compacts, so its number is the one Pi's
     // gauge must agree with. Overstating is the dangerous direction:
     // too large a number means compaction never fires and a long

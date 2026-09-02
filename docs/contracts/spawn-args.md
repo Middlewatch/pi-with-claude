@@ -6,6 +6,12 @@
 accepted verbatim; `--permission-mode bypassPermissions` runs hosted
 tools without a callback (permissionMode echoed in init); the pinned
 stdin user frame accepted. `--effort` not re-exercised this pass.
+**Re-pinned 2026-09-01 to `claude` 2.1.258** via the native bridge
+(paid capture, `.local/evidence/2026-09-01-repin-2.1.258/`): the Pipe
+argv accepted verbatim, permissionMode echoed, zero drift. The
+floating `--model fable` alias now resolves to `claude-fable-5-1`
+(2.1.258 alias table; 2.1.252 resolved it to `claude-fable-5`).
+`--effort` not re-exercised this pass.
 **Provenance:** direct read of `.local/reference/agent-sdk-0.3.226/sdk.mjs` (the owner's
 untracked evidence surround)
 (argv construction; `CLAUDE_CODE_ENTRYPOINT` handling at offsets ~779900,

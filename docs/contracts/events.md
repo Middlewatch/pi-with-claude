@@ -7,6 +7,12 @@ user frame, identical `capabilities` set, `apiKeySource: "none"` under
 subscription auth, result subtypes and cumulative-cost semantics
 unchanged (interrupted turn added nothing to `total_cost_usd`). No
 drift in the depended-on families.
+**Re-pinned 2026-09-01 to `claude` 2.1.258** via the native bridge
+(paid capture, `.local/evidence/2026-09-01-repin-2.1.258/`): zero
+drift — identical `capabilities`, init shape, result subtypes, and
+cumulative-cost semantics. The `fable` alias now resolves to
+`claude-fable-5-1` (was `claude-fable-5` at 2.1.252); context windows
+unchanged for all four aliases.
 **Provenance:** characterization captures, 2026-08-09 — raw records with timestamps in
 `.local/artifacts/characterization-2026-08-09/` (the owner's untracked
 evidence surround; `leg_a.raw.jsonl`,

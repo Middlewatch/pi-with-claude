@@ -8,6 +8,10 @@ mcp_message exchanges unchanged. `get_context_usage` now HAS capture
 provenance: the 2.1.252 answer carries `totalTokens`, `maxTokens`,
 `rawMaxTokens`, `percentage`, `categories`, `model` — the typings-derived
 shape below held on the real wire.
+**Re-pinned 2026-09-01 to `claude` 2.1.258** via the native bridge
+(paid capture, `.local/evidence/2026-09-01-repin-2.1.258/`): zero
+drift — initialize, interrupt receipt (2 ms), mcp_message, and
+`get_context_usage` all byte-compatible with the 2.1.252 pin.
 **Provenance:** characterization captures, 2026-08-09
 (untracked `.local/artifacts/characterization-2026-08-09/`:
 leg A initialize + interrupt exchanges, leg B mcp_message + can_use_tool

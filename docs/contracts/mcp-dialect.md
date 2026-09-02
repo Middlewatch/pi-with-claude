@@ -5,6 +5,10 @@
 (paid capture, `.local/evidence/2026-08-31-s3/`): the CLI still offers
 `2025-11-25` (clientInfo version 2.1.252), accepts this host's answers,
 and stamps `claudecode/toolUseId` into tools/call `_meta`.
+**Re-pinned 2026-09-01 to `claude` 2.1.258** via the native bridge
+(paid capture, `.local/evidence/2026-09-01-repin-2.1.258/`): still
+`2025-11-25` (clientInfo version 2.1.258), same handshake, same
+`_meta` stamping. Zero drift.
 **Provenance:** the observed wire, not a spec reading — the SDK-driven
 characterization capture, 2026-08-09 (`fixtures/mcp-dialect-turn.jsonl`, byte-verbatim both
 directions; raw in the untracked `.local/artifacts/characterization-2026-08-09/`). Only a
