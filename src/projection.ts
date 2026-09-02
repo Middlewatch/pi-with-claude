@@ -9,14 +9,9 @@
 
 type Json = any;
 
-// Tool-call ids -> the claude-wire tool name (mcp__<server>__<name>).
-// Pi executes tools by its own registry names, so Pi-facing content
-// carries the plain name and the projection restores the wire form —
-// this map keeps the mirror byte-stable across that round trip. Ids
-// are globally unique, so the map safely outlives session reopens.
-export const wireNames = new Map<string, string>();
-
-// The in-process MCP server every Pi tool is hosted under.
+// The in-process MCP server every Pi tool is hosted under. Pi executes
+// tools by its own registry names, so Pi-facing content carries the
+// plain name and the projection restores the wire form.
 export const MCP_SERVER = "pi";
 export const wireToolName = (plain: string) => `mcp__${MCP_SERVER}__${plain}`;
 
@@ -38,12 +33,7 @@ export function assistantBlocks(content: Json[]): Json[] {
       ? { type: "text", text: c.text }
       : c.type === "thinking"
         ? { type: "thinking", text: c.thinking }
-        : {
-            type: "tool_call",
-            id: c.id,
-            name: wireNames.get(c.id) ?? (c.name.startsWith("mcp__") ? c.name : wireToolName(c.name)),
-            input: c.arguments,
-          },
+        : { type: "tool_call", id: c.id, name: wireToolName(c.name), input: c.arguments },
   );
 }
 

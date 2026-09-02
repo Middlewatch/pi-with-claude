@@ -252,6 +252,9 @@ export class Bridge {
       } catch {
         continue; // non-JSON output is tolerated, never an error
       }
+      // A bare JSON scalar or null is not a frame; routing it would
+      // throw inside the stdout listener and take the host down.
+      if (frame === null || typeof frame !== "object") continue;
       if (!this.handleControl(frame)) this.deliver(frame);
     }
   }

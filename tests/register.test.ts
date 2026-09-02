@@ -8,17 +8,25 @@ import register from "../src/extension.ts";
 
 function captured() {
   let provider: any = null;
+  const events: string[] = [];
   register({
     registerProvider(id: string, config: any) {
       provider = { id, config };
     },
     registerCommand() {},
+    on(event: string) {
+      events.push(event);
+    },
   } as any);
-  return provider;
+  return { provider, events };
 }
 
+test("registers a session_shutdown handler for the child", () => {
+  assert.deepEqual(captured().events, ["session_shutdown"]);
+});
+
 test("registers the pi-with-claude provider with the settled roster", () => {
-  const p = captured();
+  const p = captured().provider;
   assert.ok(p, "extension did not call registerProvider");
   assert.equal(p.id, "pi-with-claude");
   assert.equal(typeof p.config.streamSimple, "function");

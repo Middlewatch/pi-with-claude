@@ -62,6 +62,7 @@ async function loadProvider() {
     registerProvider(id, config) {
       captured = { id, config };
     },
+    on() {},
     registerCommand(name, config) {
       commands.set(name, config);
     },

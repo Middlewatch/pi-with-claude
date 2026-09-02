@@ -222,13 +222,19 @@ test("interrupt: receipt-acked, turn ends with the captured error result", async
   b.close();
 });
 
-test("unknown frames flow through the pump untouched (I4)", async (t) => {
+test("unknown frames flow through the pump untouched; JSON scalars are dropped (I4)", async (t) => {
   const { b } = openFake(t, { env: { FAKE_CLAUDE_INJECT: join(FIXTURES, "unknown-event.jsonl") } });
   b.pushUser([{ type: "text", text: "hello" }]);
   const frames = await readUntil(b, (f) => f.type === "result");
   assert.ok(
     frames.some((f) => f.type === "zz_synthetic_future_event"),
     "the synthesized unheard-of frame reached the reader as data",
+  );
+  // The same fixture carries a `null` line and a bare string: neither
+  // is a frame, and routing them used to throw inside the stdout listener.
+  assert.ok(
+    frames.every((f) => f !== null && typeof f === "object"),
+    "a JSON scalar line reached the reader",
   );
 });
 

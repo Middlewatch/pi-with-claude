@@ -26,11 +26,10 @@ import {
   hasToolResult,
   isUserContent,
   keyOf,
-  MCP_SERVER,
   plainToolName,
   projectMessages,
   projectTools,
-  wireNames,
+  wireToolName,
 } from "./projection.ts";
 import { Bridge, type ToolCallRequest } from "./bridge.ts";
 import { accounts, ambient, pinned, selectAccount, selected } from "./accounts.ts";
@@ -102,6 +101,7 @@ class Session {
   // CLI's own).
   lastCostUsd = 0;
   inFlight = false; // a model turn is paused on Pi-run tool calls
+  initSeen = false; // the session's system/init frame arrived and passed I6
   // Parked tool calls: handlers blocking on promises a later Pi turn
   // resolves. Keyed by the model's tool_use id once known; a call the
   // CLI dispatched without its _meta id waits in parkedUnbound until
@@ -153,33 +153,6 @@ class Session {
     });
   }
 
-  read(): Promise<Json> {
-    return this.bridge.read();
-  }
-
-  pushUser(content: Json[]) {
-    this.bridge.pushUser(content);
-  }
-
-  interrupt(): Promise<void> {
-    return this.bridge.interrupt();
-  }
-
-  getContextUsage(): Promise<Json> {
-    return this.bridge.getContextUsage();
-  }
-
-  // The event loop holds only while a turn is in flight: ref on entry,
-  // unref when the stream settles, so a host like `pi -p` can exit the
-  // moment it is done while an awaiting caller is never starved.
-  ref() {
-    this.bridge.ref();
-  }
-
-  unref() {
-    this.bridge.unref();
-  }
-
   dead(): boolean {
     return this.closed || this.bridge.dead();
   }
@@ -226,7 +199,6 @@ function wireContentToPi(blocks: Json[]): Json[] {
     if (b.type === "text") out.push({ type: "text", text: b.text ?? "" });
     else if (b.type === "thinking") out.push({ type: "thinking", thinking: b.thinking ?? "" });
     else if (b.type === "tool_use") {
-      wireNames.set(b.id, b.name);
       out.push({ type: "toolCall", id: b.id, name: plainToolName(b.name), arguments: b.input ?? {} });
     }
     // Other block kinds (the wire moves): tolerated and not projected.
@@ -343,7 +315,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // the next one, never under an in-flight session.
       const accountDir = currentAccount();
       const effort = effortOf(options);
-      const expectedInitTools: string[] = tools.map((t: Json) => `mcp__${MCP_SERVER}__${t.name}`);
+      const expectedInitTools: string[] = tools.map((t: Json) => wireToolName(t.name));
       let swapped = false; // this turn reopened for a model/account/effort/tool-set change
 
       const openSession = (): Session => {
@@ -360,13 +332,13 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       const swapSession = (): Session => {
         if (s && ownsBusy) {
           s.busy = false;
-          s.unref();
+          s.bridge.unref();
         }
         session?.close();
         session = openSession();
         session.busy = true;
         ownsBusy = true;
-        session.ref();
+        session.bridge.ref();
         return session;
       };
 
@@ -397,16 +369,20 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       }
       s = session;
       if (s.busy) throw new Error("pi-with-claude: concurrent turns on one session are unsupported");
+      // The event loop holds only while a turn is in flight: ref on
+      // entry, unref when the stream settles, so a host like `pi -p`
+      // can exit the moment it is done while an awaiting caller is
+      // never starved.
       s.busy = true;
       ownsBusy = true;
-      s.ref();
+      s.bridge.ref();
 
       // Esc maps to the CLI's control-channel interrupt — never a kill;
       // the interrupted turn surfaces as its error_during_execution
       // result below and is mapped back to Pi's aborted stop.
       onAbort = () => {
         debug("interrupt requested");
-        session?.interrupt().catch(() => {});
+        session?.bridge.interrupt().catch(() => {});
       };
       options?.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -535,7 +511,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       } else {
         const content = userContentOf(sendable);
         if (content.length === 0) throw new Error("pi-with-claude: nothing new to run in this turn");
-        s.pushUser(content);
+        s.bridge.pushUser(content);
         debug("turn sent:", s.noted.length, "noted +", sendable.length, "new");
       }
 
@@ -673,7 +649,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       };
 
       while (!tryPause()) {
-        const frame = await s.read();
+        const frame = await s.bridge.read();
         debug("frame:", frame.type, frame.subtype ?? frame.event?.type ?? "");
         if (frame.type === "stream_event") {
           const ev = frame.event;
@@ -686,7 +662,11 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           turnBlocks.push(...(frame.message?.content ?? []));
         } else if (frame.type === "system" && frame.subtype === "init") {
           assertInitSurface(frame.tools, expectedInitTools);
+          s.initSeen = true;
         } else if (frame.type === "result") {
+          // I6 holds only if the surface was actually checked: a CLI
+          // that stopped announcing init would otherwise pass unasserted.
+          if (!s.initSeen) throw new Error("pi-with-claude: turn ended with no system/init frame, tool surface unasserted (I6)");
           // An interrupted turn comes back as error_during_execution,
           // not a distinct subtype (spike-characterized); it is Pi's
           // aborted stop only when this host actually interrupted.
@@ -709,7 +689,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           // estimate of last resort. Booked as cache read because that
           // is what it is — the prompt lives in the CLI's session, not
           // in tokens Pi sent this turn.
-          const cu = await s.getContextUsage().catch(() => null);
+          const cu = await s.bridge.getContextUsage().catch(() => null);
           const aggregate = frame.usage
             ? (frame.usage.input_tokens ?? 0) +
               (frame.usage.output_tokens ?? 0) +
@@ -756,7 +736,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       if (onAbort) options?.signal?.removeEventListener("abort", onAbort);
       if (s && ownsBusy) {
         s.busy = false;
-        s.unref();
+        s.bridge.unref();
       }
     }
   })();
@@ -819,6 +799,13 @@ export default function (pi: ExtensionAPI) {
     // Constructing the real class would mean a runtime import of the Pi
     // packages, which this extension deliberately never does.
     streamSimple: streamClaude as Json,
+  });
+
+  // The child is session-scoped: /new, /resume, /fork, and exit all
+  // pass here, and the next turn opens fresh from Pi's new history.
+  pi.on("session_shutdown", async () => {
+    session?.close();
+    session = null;
   });
 
   pi.registerCommand("pi-with-claude", {

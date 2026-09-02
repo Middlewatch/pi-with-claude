@@ -1,1 +1,3 @@
 {"type": "zz_synthetic_future_event", "subtype": "v99", "uuid": "00000000-0000-0000-0000-000000000000", "payload": {"nested": {"deep": true}, "list": [1, 2, 3]}}
+null
+"a bare JSON string, not a frame"

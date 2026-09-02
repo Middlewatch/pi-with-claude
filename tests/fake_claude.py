@@ -272,6 +272,11 @@ def replay_segment(io, frames, flags, hosted, server, argv, hold_after):
     state = {}
     for out in frames:
         frame = json.loads(out)
+        if not isinstance(frame, dict):
+            # A scalar line (injected hostile input) replays verbatim.
+            print(out, flush=True)
+            printed += 1
+            continue
         if frame.get("type") == "control_request":
             req = frame.get("request", {})
             subtype = req.get("subtype")
