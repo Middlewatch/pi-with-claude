@@ -308,7 +308,26 @@ def replay_segment(io, frames, flags, hosted, server, argv, hold_after):
     return False
 
 
+def auth_status():
+    """`claude auth status --json` for account discovery: signed in as
+    <dirname>@fake unless the config dir holds a `logged-out` marker.
+    FAKE_CLAUDE_AUTH_DELAY_MS sleeps first, so a test can show that
+    probes over several dirs run concurrently."""
+    delay_ms = int(os.environ.get("FAKE_CLAUDE_AUTH_DELAY_MS", "0"))
+    if delay_ms:
+        time.sleep(delay_ms / 1000)
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR", "")
+    if os.path.exists(os.path.join(config_dir, "logged-out")):
+        print(json.dumps({"loggedIn": False}))
+    else:
+        name = os.path.basename(config_dir.rstrip("/"))
+        print(json.dumps({"loggedIn": True, "email": f"{name}@fake", "subscriptionType": "max"}))
+    return 0
+
+
 def main():
+    if sys.argv[1:] == ["auth", "status", "--json"]:
+        return auth_status()
     flags = parse_own_flags(sys.argv[1:])
     log_path = os.environ.get("FAKE_CLAUDE_LOG")
     if log_path:

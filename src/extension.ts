@@ -183,8 +183,8 @@ class Session {
 // session, so it waits for the first turn or the first menu.
 type Provider = { session: Session | null; account: string | null | undefined };
 
-const currentAccount = (p: Provider): string | null =>
-  p.account === undefined ? (p.account = selected()) : p.account;
+const currentAccount = async (p: Provider): Promise<string | null> =>
+  p.account === undefined ? (p.account = await selected()) : p.account;
 
 // ---------------------------------------------------------------------
 // Wire translation at the claude boundary.
@@ -313,7 +313,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
 
       // Resolved once per turn: a switch made mid-turn takes effect on
       // the next one, never under an in-flight session.
-      const accountDir = currentAccount(p);
+      const accountDir = await currentAccount(p);
       const effort = effortOf(options);
       const expectedInitTools: string[] = tools.map((t: Json) => wireToolName(t.name));
       let swapped = false; // this turn reopened for a model/account/effort/tool-set change
@@ -833,7 +833,7 @@ export default function (pi: ExtensionAPI) {
 // account does not disturb the live session — the next turn sees the new
 // value and reopens onto it.
 async function accountMenu(p: Provider, ctx: Json) {
-  const roster = accounts();
+  const roster = await accounts();
   if (roster.length === 0) {
     ctx.ui.notify(
       "pi-with-claude: no signed-in accounts found. Log one in with " +
@@ -843,13 +843,13 @@ async function accountMenu(p: Provider, ctx: Json) {
     return;
   }
   if (pinned()) {
-    ctx.ui.notify(`pi-with-claude: account pinned by PI_WITH_CLAUDE_ACCOUNT (${currentAccount(p)})`, "warning");
+    ctx.ui.notify(`pi-with-claude: account pinned by PI_WITH_CLAUDE_ACCOUNT (${await currentAccount(p)})`, "warning");
     return;
   }
   // With nothing selected the child runs on the ambient environment; mark
   // whichever roster entry that resolves to, so the menu shows what is
   // actually in force rather than an empty list.
-  const active = currentAccount(p) ?? ambient();
+  const active = (await currentAccount(p)) ?? ambient();
   const rows = roster.map((a) => ({ dir: a.dir, text: `${a.dir === active ? "● " : "  "}${a.label}` }));
   const choice = await ctx.ui.select("Account", rows.map((r) => r.text));
   if (!choice) return;
