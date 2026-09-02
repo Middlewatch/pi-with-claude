@@ -100,6 +100,9 @@ export const keyOf = (msg: Json) =>
 // candidate — a Pi-side deletion of absorbed history (branch
 // navigation, compaction) that a live session must not paper over.
 // Dropped history going missing raises nothing: the model never saw it.
+// Membership, not index order, is the as-built relaxation of bridge-v1
+// §prefix-match: Pi does not reorder, and a reordered history would
+// surface as "nothing new to run", never as a replay.
 export function diffNew(
   candidate: Json[],
   noted: Json[],

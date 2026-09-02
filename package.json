@@ -17,8 +17,7 @@
     "url": "https://github.com/Middlewatch/pi-with-claude/issues"
   },
   "files": [
-    "src",
-    "DESIGN.md"
+    "src"
   ],
   "pi": {
     "extensions": [

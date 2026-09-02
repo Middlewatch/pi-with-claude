@@ -23,7 +23,7 @@ of the frozen provenance record and are left as written.
 - `mcp-dialect.md`: the MCP subset spoken over the control channel for
   in-process tools.
 - `bridge-v1.md`: the neutral message schema and prefix-match restart
-  semantics (DESIGN.md "honest restart"); the NDJSON stdio transport it
+  semantics (AGENTS.md "honest restart"); the NDJSON stdio transport it
   also describes is claude-go's and is not implemented here, and its
   index-wise prefix comparison is relaxed to identity-key membership
-  (DESIGN.md session doctrine).
+  (`projection.ts` `diffNew`).

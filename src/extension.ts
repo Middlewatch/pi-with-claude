@@ -1,7 +1,7 @@
 // Pi extension: Claude Code as a Pi model provider, in-process on the
 // native stream-json bridge (src/bridge.ts, ADR 0002). Pi owns the
 // harness — system prompt, tools, transcript; the extension runs
-// `claude` as a stripped backend (DESIGN.md): no builtin tools, no
+// `claude` as a stripped backend (AGENTS.md): no builtin tools, no
 // setting sources, the init tool surface asserted (I6). Pi's projected
 // context goes out as wire turns; wire frames come back as Pi's
 // assistant-message event stream. The extension's durable state is a
