@@ -34,7 +34,7 @@ const stateDir = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"),
 const stateFile = join(stateDir, "account");
 
 // The binary that answers `auth status`. PI_WITH_CLAUDE_CLAUDE points
-// the SDK at a scripted fake in tests; discovery follows it so a test
+// the bridge at a scripted fake in tests; discovery follows it so a test
 // installation never probes the real one.
 const claudeBin = () => process.env.PI_WITH_CLAUDE_CLAUDE || "claude";
 

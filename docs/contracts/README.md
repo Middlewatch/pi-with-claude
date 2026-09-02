@@ -24,4 +24,6 @@ of the frozen provenance record and are left as written.
   in-process tools.
 - `bridge-v1.md`: the neutral message schema and prefix-match restart
   semantics (DESIGN.md "honest restart"); the NDJSON stdio transport it
-  also describes is claude-go's and is not implemented here.
+  also describes is claude-go's and is not implemented here, and its
+  index-wise prefix comparison is relaxed to identity-key membership
+  (DESIGN.md session doctrine).

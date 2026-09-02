@@ -2,11 +2,23 @@
   "name": "pi-with-claude",
   "version": "0.0.0",
   "private": true,
-  "description": "Claude Code as a Pi model provider — an in-process Pi extension speaking the claude stream-json wire natively",
+  "description": "Claude Code as a Pi model provider: an in-process Pi extension speaking the claude stream-json wire natively",
   "type": "module",
   "license": "MIT",
   "keywords": [
     "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Middlewatch/pi-with-claude.git"
+  },
+  "homepage": "https://github.com/Middlewatch/pi-with-claude#readme",
+  "bugs": {
+    "url": "https://github.com/Middlewatch/pi-with-claude/issues"
+  },
+  "files": [
+    "src",
+    "DESIGN.md"
   ],
   "pi": {
     "extensions": [
@@ -15,6 +27,10 @@
   },
   "engines": {
     "node": ">=22.18"
+  },
+  "scripts": {
+    "verify": "scripts/verify.sh",
+    "prepublishOnly": "scripts/verify.sh"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.4",
