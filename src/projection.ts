@@ -134,12 +134,18 @@ export function diffNew(
 // honestly receive: the trailing run of user messages (the newest
 // input), minus any leading tool_results (their calls cannot exist in
 // a fresh session, and an unclaimable tool_result would fail the turn).
-export function freshStart(candidate: Json[]): Json[] {
+// Everything cut away is returned as the dropped ledger, so the next
+// diff never re-flags it as new.
+export function freshStart(candidate: Json[]): { sendable: Json[]; dropped: Map<string, number> } {
   let cut = candidate.length;
   while (cut > 0 && candidate[cut - 1].role === "user") cut--;
-  let slice = candidate.slice(cut);
-  while (slice.length > 0 && slice[0].blocks.every((b: Json) => b.type === "tool_result")) slice = slice.slice(1);
-  return slice;
+  while (cut < candidate.length && candidate[cut].blocks.every((b: Json) => b.type === "tool_result")) cut++;
+  const dropped = new Map<string, number>();
+  for (const m of candidate.slice(0, cut)) {
+    const k = keyOf(m);
+    dropped.set(k, (dropped.get(k) ?? 0) + 1);
+  }
+  return { sendable: candidate.slice(cut), dropped };
 }
 
 export const isUserContent = (m: Json) => m.blocks.some((b: Json) => b.type === "text" || b.type === "image");

@@ -25,7 +25,6 @@ import {
   freshStart,
   hasToolResult,
   isUserContent,
-  keyOf,
   plainToolName,
   projectMessages,
   projectTools,
@@ -274,6 +273,45 @@ function effortOf(options: Json): string {
 }
 
 // ---------------------------------------------------------------------
+// Streamed content blocks: one open block at a time on the claude wire,
+// keyed by kind and wire index — consecutive blocks of one kind are
+// distinct blocks (fable 5.1 emits two thinking blocks back to back: an
+// empty signed one, then the summary). A delta appends to the partial
+// message and mirrors onto the event stream; close ends the open block.
+
+function blockWriter(stream: ReturnType<typeof makeEventStream>, output: Json) {
+  let openKind: "text" | "thinking" | null = null;
+  let openIndex = -1;
+  const close = () => {
+    if (!openKind) return;
+    const i = output.content.length - 1;
+    const blk = output.content[i];
+    stream.push(
+      openKind === "text"
+        ? { type: "text_end", contentIndex: i, content: blk.text, partial: output }
+        : { type: "thinking_end", contentIndex: i, content: blk.thinking, partial: output },
+    );
+    openKind = null;
+    openIndex = -1;
+  };
+  // A delta without a wire index continues the open block.
+  const delta = (kind: "text" | "thinking", index: number | null, text: string) => {
+    if (openKind !== kind || (index !== null && openIndex !== index)) {
+      close();
+      openKind = kind;
+      openIndex = index ?? openIndex;
+      output.content.push(kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" });
+      stream.push({ type: `${kind}_start`, contentIndex: output.content.length - 1, partial: output });
+    }
+    const i = output.content.length - 1;
+    if (kind === "text") output.content[i].text += text;
+    else output.content[i].thinking += text;
+    stream.push({ type: `${kind}_delta`, contentIndex: i, delta: text, partial: output });
+  };
+  return { delta, close };
+}
+
+// ---------------------------------------------------------------------
 // streamSimple: one session turn per call.
 
 function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
@@ -396,22 +434,12 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       // re-flagged as new.
       const takeFreshStart = () => {
         freshStarted = true;
-        sendable = freshStart(candidate);
+        const plan = freshStart(candidate);
+        sendable = plan.sendable;
         s!.noted = [];
         s!.inFlight = false;
-        const sendCounts = new Map<string, number>();
-        for (const m of sendable) {
-          const k = keyOf(m);
-          sendCounts.set(k, (sendCounts.get(k) ?? 0) + 1);
-        }
-        const drop = new Map<string, number>();
-        for (const m of candidate) {
-          const k = keyOf(m);
-          if ((sendCounts.get(k) ?? 0) > 0) sendCounts.set(k, sendCounts.get(k)! - 1);
-          else drop.set(k, (drop.get(k) ?? 0) + 1);
-        }
-        s!.dropped = drop;
-        debug("fresh start:", sendable.length, "sendable,", drop.size, "dropped key(s)");
+        s!.dropped = plan.dropped;
+        debug("fresh start:", sendable.length, "sendable,", plan.dropped.size, "dropped key(s)");
       };
 
       const { fresh, deleted } = diffNew(candidate, s.noted, s.dropped);
@@ -515,37 +543,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         debug("turn sent:", s.noted.length, "noted +", sendable.length, "new");
       }
 
-      // Streaming state: one open block at a time on the claude wire,
-      // keyed by kind and wire index — consecutive blocks of one kind
-      // are distinct blocks (fable 5.1 emits two thinking blocks back
-      // to back: an empty signed one, then the summary).
-      let openKind: "text" | "thinking" | null = null;
-      let openIndex = -1;
-      const closeBlock = () => {
-        if (!openKind) return;
-        const i = output.content.length - 1;
-        const blk = output.content[i];
-        stream.push(
-          openKind === "text"
-            ? { type: "text_end", contentIndex: i, content: blk.text, partial: output }
-            : { type: "thinking_end", contentIndex: i, content: blk.thinking, partial: output },
-        );
-        openKind = null;
-        openIndex = -1;
-      };
-      const onDelta = (kind: "text" | "thinking", index: number, text: string) => {
-        if (openKind !== kind || openIndex !== index) {
-          closeBlock();
-          openKind = kind;
-          openIndex = index;
-          output.content.push(kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" });
-          stream.push({ type: `${kind}_start`, contentIndex: output.content.length - 1, partial: output });
-        }
-        const i = output.content.length - 1;
-        if (kind === "text") output.content[i].text += text;
-        else output.content[i].thinking += text;
-        stream.push({ type: `${kind}_delta`, contentIndex: i, delta: text, partial: output });
-      };
+      const blocks = blockWriter(stream, output);
 
       // The turn's authoritative assistant blocks: the CLI emits one
       // assistant frame per completed content block (characterized,
@@ -559,7 +557,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       // result — with the accumulated assistant frames as the
       // authoritative message Pi stores and re-projects next turn.
       const finalizeTurn = (reason: string) => {
-        closeBlock();
+        blocks.close();
         // At a tool-call pause the stretch carries the blocks whose calls
         // are dispatched; tool_use blocks still awaiting their dispatch
         // open the next stretch. Any other ending drops them: the model
@@ -654,9 +652,9 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         if (frame.type === "stream_event") {
           const ev = frame.event;
           if (ev?.type === "content_block_delta") {
-            const index = typeof ev.index === "number" ? ev.index : openIndex;
-            if (ev.delta?.type === "text_delta") onDelta("text", index, ev.delta.text ?? "");
-            else if (ev.delta?.type === "thinking_delta") onDelta("thinking", index, ev.delta.thinking ?? "");
+            const index = typeof ev.index === "number" ? ev.index : null;
+            if (ev.delta?.type === "text_delta") blocks.delta("text", index, ev.delta.text ?? "");
+            else if (ev.delta?.type === "thinking_delta") blocks.delta("thinking", index, ev.delta.thinking ?? "");
           }
         } else if (frame.type === "assistant") {
           turnBlocks.push(...(frame.message?.content ?? []));

@@ -82,11 +82,15 @@ test("dropped history is subtracted and its absence raises nothing", () => {
   assert.deepEqual(gone.fresh, [user("next")]);
 });
 
-test("freshStart takes the trailing user run minus leading tool_results", () => {
+test("freshStart takes the trailing user run minus leading tool_results; the rest is dropped", () => {
   const candidate = [user("q"), asst("a"), toolRes("t1", "5"), user("follow"), user("up")];
-  assert.deepEqual(freshStart(candidate), [user("follow"), user("up")]);
-  assert.deepEqual(freshStart([user("q"), asst("a")]), []);
-  assert.deepEqual(freshStart([asst("a"), toolRes("t1", "5")]), []);
+  const plan = freshStart(candidate);
+  assert.deepEqual(plan.sendable, [user("follow"), user("up")]);
+  assert.deepEqual([...plan.dropped], [[keyOf(user("q")), 1], [keyOf(asst("a")), 1], [keyOf(toolRes("t1", "5")), 1]]);
+  assert.deepEqual(freshStart([user("q"), asst("a")]).sendable, []);
+  assert.deepEqual(freshStart([asst("a"), toolRes("t1", "5")]).sendable, []);
+  // Dropped history is subtracted from the next diff, never re-flagged.
+  assert.deepEqual(diffNew(candidate, plan.sendable, plan.dropped), { fresh: [], deleted: false });
 });
 
 test("in-flight classification: user content vs completions", () => {
