@@ -533,8 +533,12 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         debug("turn sent:", s.noted.length, "noted +", sendable.length, "new");
       }
 
-      // Streaming state: one open block at a time on the claude wire.
+      // Streaming state: one open block at a time on the claude wire,
+      // keyed by kind and wire index — consecutive blocks of one kind
+      // are distinct blocks (fable 5.1 emits two thinking blocks back
+      // to back: an empty signed one, then the summary).
       let openKind: "text" | "thinking" | null = null;
+      let openIndex = -1;
       const closeBlock = () => {
         if (!openKind) return;
         const i = output.content.length - 1;
@@ -545,11 +549,13 @@ function streamClaude(model: Json, context: Json, options?: Json) {
             : { type: "thinking_end", contentIndex: i, content: blk.thinking, partial: output },
         );
         openKind = null;
+        openIndex = -1;
       };
-      const onDelta = (kind: "text" | "thinking", text: string) => {
-        if (openKind !== kind) {
+      const onDelta = (kind: "text" | "thinking", index: number, text: string) => {
+        if (openKind !== kind || openIndex !== index) {
           closeBlock();
           openKind = kind;
+          openIndex = index;
           output.content.push(kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" });
           stream.push({ type: `${kind}_start`, contentIndex: output.content.length - 1, partial: output });
         }
@@ -578,15 +584,20 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           // Recover reasoning the CLI streamed but reported empty in
           // its final frames (characterized: assistant frames can carry
           // a thinking block with no text while the deltas carried it).
-          // A turn that never streamed thinking stays honestly empty —
+          // Only streamed text no frame already carries is a candidate:
+          // fable 5.1 at high effort answers with two thinking blocks —
+          // an empty signed block, then the summary (characterized
+          // 2026-09-02, fixtures/tool-call-turn-double-thinking.jsonl) —
+          // and the summary must not be copied into the empty one. A
+          // turn that never streamed thinking stays honestly empty —
           // nothing is invented.
-          const streamedThinking = output.content.filter((c: Json) => c.type === "thinking");
+          const carried = new Set(turnBlocks.filter((b: Json) => b.type === "thinking" && b.thinking).map((b: Json) => b.thinking));
+          const unclaimed = output.content
+            .filter((c: Json) => c.type === "thinking" && c.thinking && !carried.has(c.thinking))
+            .map((c: Json) => c.thinking);
           output.content = wireContentToPi(turnBlocks);
-          let ti = 0;
           for (const c of output.content) {
-            if (c.type !== "thinking") continue;
-            const st = streamedThinking[ti++];
-            if (!c.thinking && st?.thinking) c.thinking = st.thinking;
+            if (c.type === "thinking" && !c.thinking && unclaimed.length) c.thinking = unclaimed.shift();
           }
         }
         s!.inFlight = reason === "tool_calls";
@@ -638,8 +649,9 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         if (frame.type === "stream_event") {
           const ev = frame.event;
           if (ev?.type === "content_block_delta") {
-            if (ev.delta?.type === "text_delta") onDelta("text", ev.delta.text ?? "");
-            else if (ev.delta?.type === "thinking_delta") onDelta("thinking", ev.delta.thinking ?? "");
+            const index = typeof ev.index === "number" ? ev.index : openIndex;
+            if (ev.delta?.type === "text_delta") onDelta("text", index, ev.delta.text ?? "");
+            else if (ev.delta?.type === "thinking_delta") onDelta("thinking", index, ev.delta.thinking ?? "");
           }
         } else if (frame.type === "assistant") {
           turnBlocks.push(...(frame.message?.content ?? []));

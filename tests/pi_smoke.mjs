@@ -128,9 +128,12 @@ if (phase === "--stale") {
   process.exit(0);
 }
 
-// Shared by --deny / --empty-thinking / --thinkless: one tool loop with
-// the pause surfaced to the (stub) host and the completion resolving it.
-async function toolLoop({ isError, wantThinking }) {
+// Shared by --deny / --empty-thinking / --thinkless / --double-thinking:
+// one tool loop with the pause surfaced to the (stub) host and the
+// completion resolving it. wantThinking checks the first thinking
+// block's text ("" for empty, else a prefix); wantBlocks checks the
+// whole run of thinking blocks the same way, in order.
+async function toolLoop({ isError, wantThinking, wantBlocks }) {
   const { id, config: cfg } = await loadProvider();
   const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
   const ctx = {
@@ -151,6 +154,11 @@ async function toolLoop({ isError, wantThinking }) {
     } else if (!think.thinking.startsWith(wantThinking)) {
       fail(`recovered thinking is not the streamed text: ${JSON.stringify(think.thinking.slice(0, 80))}`);
     }
+  }
+  if (wantBlocks) {
+    const got = pause.content.filter((c) => c.type === "thinking").map((c) => c.thinking);
+    const ok = got.length === wantBlocks.length && got.every((t, i) => (wantBlocks[i] === "" ? t === "" : t.startsWith(wantBlocks[i])));
+    if (!ok) fail(`thinking blocks ${JSON.stringify(got.map((t) => t.slice(0, 40)))}, want ${JSON.stringify(wantBlocks.map((t) => t.slice(0, 40)))}`);
   }
   ctx.messages.push(pause, {
     role: "toolResult", toolCallId: call.id, toolName: call.name,
@@ -179,6 +187,16 @@ if (phase === "--empty-thinking") {
   // host. Regression from claude-go (2026-08-10, opus at high).
   await toolLoop({ isError: false, wantThinking: "The user wants me to use the add tool" });
   console.log("pi_smoke empty-thinking: OK");
+  process.exit(0);
+}
+
+if (phase === "--double-thinking") {
+  // Two thinking blocks in one message — an empty signed block, then
+  // the summary (fable 5.1 at high effort, characterized 2026-09-02):
+  // the summary must reach the host once, not be copied into the
+  // empty block as well.
+  await toolLoop({ isError: false, wantBlocks: ["", "The user wants me to use the add tool"] });
+  console.log("pi_smoke double-thinking: OK");
   process.exit(0);
 }
 
@@ -691,6 +709,7 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
 for (const [flag, fixture] of [
   ["--empty-thinking", "tool-call-turn-empty-thinking.jsonl"],
   ["--thinkless", "tool-call-turn-thinkless.jsonl"],
+  ["--double-thinking", "tool-call-turn-double-thinking.jsonl"],
 ]) {
   const { trace } = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture) });
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
