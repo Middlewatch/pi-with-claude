@@ -2,10 +2,8 @@
 // mirror-diff primitives. Pure functions, no SDK and no Pi imports —
 // this is the module the unit tests drive.
 //
-// The neutral schema and the restart taxonomy are specified by
-// docs/contracts/bridge-v1.md; the identity-keyed diff is ADR 0001.
-// Ported 2026-08-31 from the retired claude-go's adapters/pi/
-// extension.ts, where every branch below was proven in production.
+// The neutral schema, the identity-keyed diff, and the restart taxonomy
+// are specified by docs/contracts/bridge-v1.md.
 
 type Json = any;
 
@@ -35,8 +33,8 @@ export function plainToolName(wire: string): string {
 // Pi assistant content -> neutral blocks. Used BOTH to project Pi's
 // history and to normalise what the mirror notes, so the two forms are
 // identical by construction (deriving the mirror from wire frames
-// instead made them agree only by coincidence — the claude-go
-// empty-thinking regression).
+// instead made them agree only by coincidence: the empty-thinking
+// regression, fixtures/tool-call-turn-empty-thinking.jsonl).
 export function assistantBlocks(content: Json[]): Block[] {
   return content.map((c: Json) =>
     c.type === "text"
@@ -90,7 +88,8 @@ export function projectMessages(messages: Json[]): Message[] {
 // never be reseeded with an edited transcript. So identity ignores exactly
 // those two mutable-in-place fields: tool_result content (call_id names
 // the lived event) and thinking text. A masked copy then diffs as
-// already-absorbed history — no fresh session, no restart (ADR 0001). Set
+// already-absorbed history — no fresh session, no restart (bridge-v1.md
+// §identity-keys). Set
 // changes (messages added, removed, replaced — branch navigation,
 // compaction) still diff as before.
 export const keyOf = (msg: Message) =>

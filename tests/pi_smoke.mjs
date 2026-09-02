@@ -10,10 +10,6 @@
 //     for fresh module state): drive streamSimple directly under a
 //     stubbed Pi API to reach histories real `pi -p` cannot produce —
 //     seeded resumes, stale tool results, regression fixtures.
-//
-// Ported from claude-go's tests/pi_smoke.mjs; the stub-API scenarios
-// carry over, the real-pi tier arrived with the SDK rebuild and rides
-// the native bridge unchanged — the same wire from a different client.
 
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -185,7 +181,7 @@ if (phase === "--deny") {
 if (phase === "--empty-thinking") {
   // The fixture's final frames report the thinking block with no text,
   // but the deltas carried it: the streamed reasoning must reach the
-  // host. Regression from claude-go (2026-08-10, opus at high).
+  // host. Regression observed 2026-08-10 (opus at high).
   await toolLoop({ isError: false, wantThinking: "The user wants me to use the add tool" });
   console.log("pi_smoke empty-thinking: OK");
   process.exit(0);
@@ -370,8 +366,9 @@ if (phase === "--fold") {
   // call is in flight. The stateful CLI keeps the originals as the
   // model's lived context and can never be reseeded, so the masked
   // copies must diff as already-seen history: the paused turn resumes
-  // on the live session and nothing fresh-starts or reopens (ADR 0001;
-  // regression for claude-go's 2026-08-22 mid-flight fold crash).
+  // on the live session and nothing fresh-starts or reopens
+  // (bridge-v1.md §identity-keys; regression for the 2026-08-22
+  // mid-flight fold crash).
   const { id, config: cfg } = await loadProvider();
   const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
   const ctx = {

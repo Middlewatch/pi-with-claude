@@ -1,109 +1,106 @@
-# Event stream — frozen wire contract
+# Event stream: frozen wire contract
 
-**Pinned to:** `claude` 2.1.226 / Agent SDK 0.3.226.
-**Re-pinned 2026-08-31 to `claude` 2.1.252** via the native bridge
-(paid capture, `.local/evidence/2026-08-31-s3/`): init re-emitted per
-user frame, identical `capabilities` set, `apiKeySource: "none"` under
-subscription auth, result subtypes and cumulative-cost semantics
-unchanged (interrupted turn added nothing to `total_cost_usd`). No
-drift in the depended-on families.
-**Re-pinned 2026-09-01 to `claude` 2.1.258** via the native bridge
-(paid capture, `.local/evidence/2026-09-01-repin-2.1.258/`): zero
-drift — identical `capabilities`, init shape, result subtypes, and
-cumulative-cost semantics. The `fable` alias now resolves to
-`claude-fable-5-1` (was `claude-fable-5` at 2.1.252); context windows
-unchanged for all four aliases.
-**Provenance:** characterization captures, 2026-08-09 — raw records with timestamps in
-`.local/artifacts/characterization-2026-08-09/` (the owner's untracked
-evidence surround; `leg_a.raw.jsonl`,
-`leg_b.stdout.raw`); committed excerpts in `fixtures/`. Only a ratified
-re-pin moves this file.
+**Pinned to:** `claude` 2.1.258, re-characterized 2026-09-01 through the
+native bridge with zero drift from the earlier pins: identical
+`capabilities`, init shape, result subtypes, and cumulative-cost
+semantics. The `fable` alias resolves to `claude-fable-5-1` at 2.1.258
+(`claude-fable-5` at 2.1.252), and the context windows of all four
+aliases are unchanged.
+
+**Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
+driven by Agent SDK 0.3.226 (two captures, leg A direct and leg B
+through the SDK; committed excerpts in `fixtures/`). Re-pinned
+2026-08-31 to 2.1.252 through the native bridge: init re-emitted per user
+frame, identical `capabilities` set, `apiKeySource: "none"` under
+subscription auth, and an interrupted turn added nothing to
+`total_cost_usd`. Only a ratified re-pin moves this file.
 
 ## The tolerance rule (I4)
 
 The event schema moves roughly 25 CLI releases a month. The decoder types
 only the families below, retains every frame's raw bytes, and maps
-anything else — unknown `type`, unknown `subtype`, unknown fields,
-non-JSON — to `UnknownEvent`, never an error. `fixtures/unknown-event.jsonl`
-is the standing falsification input (synthesized, marked as such; every
-other fixture frame is captured verbatim).
+anything else (an unknown `type`, unknown `subtype`, unknown fields, or a
+non-JSON line) to an unknown event rather than an error.
+`fixtures/unknown-event.jsonl` is the standing falsification input
+(synthesized and marked as such; every other fixture frame is captured
+verbatim).
 
 ## Timing facts (characterized)
 
-- **No frame arrives before stdin input.** 10 s observed silence with no
-  input (leg A phase 0). `system/init` is **not** emitted at spawn and is
-  **not** elicited by the `initialize` control request (15 s observed).
-- `system/init` arrives immediately after **every** user message frame
-  (observed 3/3 turns, <50 ms after the user frame, before any assistant
-  output). Consumers must tolerate repeated init frames per session.
-- The `initialize` control request **is** answered before any user input
-  (its `control_response` carries account/model/command info — see
-  `contracts/control-channel.md` when it lands). The control channel works
-  pre-input; the event stream starts with the first turn.
-- **Hosted tool calls dispatch one at a time while the model keeps
-  streaming.** At 2.1.258 the `tools/call` for a `tool_use` block follows
-  that block's `assistant` frame, and `tools/call` k+1 goes out only after
-  result k. Later blocks keep streaming meanwhile: their
+- No frame arrives before stdin input: 10 s of observed silence with no
+  input (leg A phase 0). `system/init` is neither emitted at spawn nor
+  elicited by the `initialize` control request (15 s observed).
+- `system/init` arrives immediately after every user message frame
+  (observed 3/3 turns, under 50 ms after the user frame, before any
+  assistant output). Consumers must tolerate repeated init frames per
+  session.
+- The `initialize` control request is answered before any user input;
+  its `control_response` carries account, model, and command info
+  (`contracts/control-channel.md`). The control channel works
+  pre-input, and the event stream starts with the first turn.
+- Hosted tool calls dispatch one at a time while the model keeps
+  streaming. At 2.1.258 the `tools/call` for a `tool_use` block follows
+  that block's `assistant` frame, and `tools/call` k+1 goes out only
+  after result k. Later blocks keep streaming meanwhile: their
   `content_block_*` and `assistant` frames arrive while call 1 is in
-  flight. A consumer that waits for every streamed `tool_use` block to be
-  dispatched before answering the current call deadlocks whenever a later
-  block finishes streaming first, which is what a slow first tool
-  guarantees (two frozen Pi sessions, 2026-09-02;
-  `.local/evidence/2026-09-02-serial-dispatch/`). Regression shape:
+  flight. A consumer that waits for every streamed `tool_use` block to
+  be dispatched before answering the current call deadlocks whenever a
+  later block finishes streaming first, which a slow first tool
+  guarantees (two frozen Pi sessions, 2026-09-02). Regression shape:
   `fixtures/tool-call-turn-serial.jsonl`.
 
 ## Depended-on families
 
 ### `system` / `init`
 
-Keys the library depends on: `session_id`, `model`, `tools` (final wire
-names, e.g. `mcp__codemode__run_code`), `capabilities`, `apiKeySource`
+Keys the extension depends on: `session_id`, `model`, `tools` (final
+wire names, e.g. `mcp__pi__read`), `capabilities`, `apiKeySource`
 (`"none"` under subscription auth), `mcp_servers` (`[{name, status}]`),
-`permissionMode`. Full captured key set in `fixtures/init.jsonl`.
-Observed `capabilities` at 2.1.226:
+and `permissionMode`. The full captured key set is in
+`fixtures/init.jsonl`. Observed `capabilities` at 2.1.226:
 
 ```
 ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"]
 ```
 
-(The interrupt-receipt capability name is
-`interrupt_receipt_v1`; the receipt payload observed is
-`{"still_queued": []}`.)
+The interrupt-receipt capability name is `interrupt_receipt_v1`, and the
+receipt payload observed is `{"still_queued": []}`.
 
 ### `assistant` / `user`
 
-`message` is an API-shape message object (`role`, `content` block array);
-`parent_tool_use_id` at top level. Tool use appears as a `tool_use` block
-in an assistant message; the tool result comes back as a `tool_result`
-block in a `user` frame the CLI emits on its own.
+`message` is an API-shape message object (`role`, `content` block array)
+with `parent_tool_use_id` at the top level. Tool use appears as a
+`tool_use` block in an assistant message, and the tool result comes back
+as a `tool_result` block in a `user` frame the CLI emits on its own.
 
 ### `stream_event` (only with `--include-partial-messages`)
 
-`event` field carries a `BetaRawMessageStreamEvent`
-(`message_start`, `content_block_start`, `content_block_delta` with
-`text_delta` / `thinking_delta`, `content_block_stop`, `message_stop`, …).
+The `event` field carries a `BetaRawMessageStreamEvent`: `message_start`,
+`content_block_start`, `content_block_delta` with `text_delta` or
+`thinking_delta`, `content_block_stop`, `message_stop`, and so on.
 
 ### `result`
 
-One per turn. Depended-on keys, semantics per the SDK oracle and observed:
+One per turn. The depended-on keys, per the SDK oracle and as observed:
 
-- `subtype`: `success` observed for completed turns;
+- `subtype`: `success` observed for completed turns, and
   `error_during_execution` observed for an interrupted turn
   (`is_error: true`, `result: null`).
-- `usage`: **per-turn, main agent loop only** (leg A turn 1: 879 input
-  tokens on the initialize system-prompt path — same order as the probe's
-  868).
+- `usage`: per-turn, main agent loop only (leg A turn 1: 879 input
+  tokens on the initialize system-prompt path, the same order as the
+  probe's 868).
 - `modelUsage` (keyed by full model name, e.g.
-  `claude-haiku-4-5-20251001`) and `total_cost_usd`: **cumulative running
-  totals** — read the latest result, never sum across results (summing
-  double-counts; the falsification witness is TestCumulativeIsLatestNotSum).
-  Observed: leg A results' `total_cost_usd` = 0.001665 → 0.005159 →
-  0.005159 (interrupted turn added nothing) across three turns.
+  `claude-haiku-4-5-20251001`) and `total_cost_usd` are cumulative
+  running totals. Read the latest result rather than summing across
+  results, since summing double-counts. Observed: leg A results'
+  `total_cost_usd` went 0.001665, 0.005159, 0.005159 across three turns
+  (the interrupted turn added nothing).
 - Interrupted turns: the CLI emits a `user` frame
-  (`[Request interrupted by user]`) then the error result; the interrupt
-  `control_response` (receipt `{"still_queued": []}`) precedes both.
+  (`[Request interrupted by user]`) and then the error result; the
+  interrupt `control_response` (receipt `{"still_queued": []}`) precedes
+  both.
 
-### Families observed and deliberately untyped (UnknownEvent)
+### Families observed and deliberately untyped
 
 `rate_limit_event`, `system/status`, `system/thinking_tokens`,
 `system/permission_denied` (carries `tool_name`, `tool_use_id`,
@@ -117,13 +114,13 @@ decode tests exercise them.
 |---|---|---|
 | `init.jsonl` | first observed `system/init`, verbatim | leg A |
 | `turn-deltas.jsonl` | one full text turn: init, rate_limit_event, stream_events, assistant (thinking+text), result | leg A turn 1 |
-| `tool-call-turn.jsonl` | full in-process tool turn incl. control_request frames in stream position | leg B stdout |
+| `tool-call-turn.jsonl` | full in-process tool turn including control_request frames in stream position | leg B stdout |
 | `tool-call-turn-empty-thinking.jsonl` | as above, with the assistant messages' `thinking` blanked: the reasoning-model shape where the final message reports the block but not its text, while the deltas carried it | derived from `tool-call-turn.jsonl` |
 | `tool-call-turn-thinkless.jsonl` | as above with the thinking `stream_event`s also removed: an empty thinking block with nothing behind it to recover | derived from `tool-call-turn-empty-thinking.jsonl` |
-| `tool-call-turn-serial.jsonl` | one message, three `tool_use` blocks (indices 1..3) in the 2.1.258 wire order: each block's `assistant` frame, then its `tools/call`, with blocks 2 and 3 fully streamed before call 2 exists. `tests/fake_claude.py` blocks at each `tools/call` until answered, so the losing race is deterministic; `FAKE_CLAUDE_CALL_DELAY_MS` keeps the frames ahead of each call in their own chunk | derived from `tool-call-turn.jsonl` (`.local/evidence/2026-09-02-serial-dispatch/derive-serial.py`) |
-| `tool-call-turn-double-thinking.jsonl` | two thinking blocks in one message: index 0 an empty signed block (one empty `thinking_delta`, signature, empty assistant frame), index 1 the summary carrying the text, tool_use at index 2. The shape fable 5.1 emits at high effort (CLI 2.1.258 transcript, 2026-09-02: `apiBlockIndex` 0/1/2 with distinct signatures, in all 615 messages where a thinking block carried text at `thinking_tokens` > 0; the ~40 single text-bearing blocks all sat at `thinking_tokens` 0); haiku and fable on trivial prompts never produced it under the bridge (`.local/evidence/2026-09-02-double-thinking/`) | derived from `tool-call-turn-empty-thinking.jsonl` |
+| `tool-call-turn-serial.jsonl` | one message, three `tool_use` blocks (indices 1..3) in the 2.1.258 wire order: each block's `assistant` frame, then its `tools/call`, with blocks 2 and 3 fully streamed before call 2 exists. `tests/fake_claude.py` blocks at each `tools/call` until answered, so the losing race is deterministic; `FAKE_CLAUDE_CALL_DELAY_MS` keeps the frames ahead of each call in their own chunk | derived from `tool-call-turn.jsonl` |
+| `tool-call-turn-double-thinking.jsonl` | two thinking blocks in one message: index 0 an empty signed block (one empty `thinking_delta`, signature, empty assistant frame), index 1 the summary carrying the text, tool_use at index 2. The shape fable 5.1 emits at high effort (CLI 2.1.258 transcript, 2026-09-02: `apiBlockIndex` 0/1/2 with distinct signatures, in all 615 messages where a thinking block carried text at `thinking_tokens` > 0; the ~40 single text-bearing blocks all sat at `thinking_tokens` 0). Haiku and fable on trivial prompts never produced it under the bridge | derived from `tool-call-turn-empty-thinking.jsonl` |
 | `denied-tool-turn.jsonl` | full dontAsk denial turn: tool_use, `system/permission_denied`, denial tool_result, result | leg A turn 2 |
-| `result-usage.jsonl` | three verbatim result frames (per-turn + cumulative fields) | legs A+B |
+| `result-usage.jsonl` | three verbatim result frames (per-turn and cumulative fields) | legs A and B |
 | `interrupt-turn.jsonl` | directional `{"dir":"lib"\|"cli","frame":…}`: user frame, our interrupt request, ack, interrupted result | leg A turn 3 |
-| `mcp-dialect-turn.jsonl` | directional: initialize request, MCP handshake / tools/list / tools/call / can_use_tool with our responses | leg B both dirs |
+| `mcp-dialect-turn.jsonl` | directional: initialize request, MCP handshake / tools/list / tools/call / can_use_tool with our responses | leg B both directions |
 | `unknown-event.jsonl` | synthesized unheard-of type (I4 falsification) | synthesized |

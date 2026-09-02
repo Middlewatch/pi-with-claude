@@ -14,8 +14,7 @@
 // configuration. PI_WITH_CLAUDE_ACCOUNTS overrides discovery entirely
 // when the convention guesses wrong.
 //
-// Ported 2026-08-31 from claude-go adapters/pi/accounts.ts (env names
-// renamed, otherwise verbatim). Runs under node's type stripping.
+// Runs under node's type stripping.
 
 import { spawn } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";

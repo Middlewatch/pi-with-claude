@@ -1,6 +1,5 @@
 // The native stream-json bridge: one spawned `claude` child driven over
-// bidirectional stream-json, per docs/contracts/ (ADR 0002 — the port of
-// claude-go's session/control/toolhost trio). The bridge owns the
+// bidirectional stream-json, per docs/contracts/. The bridge owns the
 // process and the wire: spawn argv (spawn-args.md), the control channel
 // (control-channel.md), the in-process MCP dialect (mcp-dialect.md), and
 // the tolerant read pump (events.md I4). Everything above it — the
@@ -46,7 +45,7 @@ export type BridgeOptions = {
 
 // The child argv after the binary, per docs/contracts/spawn-args.md: the
 // pinned base set, then conditional flags in the contract's pinned
-// order. The posture is claude-go's characterized Pipe profile: no
+// order. The posture is the characterized Pipe profile: no
 // builtin tools, no setting sources, strict MCP config, and
 // bypassPermissions — dontAsk denies without asking, and Pi owns all
 // gating, so there is nothing for the CLI's permission layer to do.

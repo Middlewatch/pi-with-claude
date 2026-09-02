@@ -2,7 +2,6 @@
 // directly — the wire the extension rides in the smoke, minus Pi. The
 // fake validates our frames against docs/contracts/ and exits 2 loudly
 // on a malformed one, so a completed turn is itself a contract check.
-// Prior art: claude-go session_test.go.
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync } from "node:fs";

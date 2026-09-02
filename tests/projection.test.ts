@@ -1,7 +1,7 @@
 // The projection-diff/mirror module against the restart taxonomy of
 // bridge-v1 §prefix-match (docs/contracts/bridge-v1.md):
 // shrunk history, prefix mismatch, stale tool_result, in-flight user
-// content, identity-keyed masks (ADR 0001), precision edges.
+// content, identity-keyed masks, precision edges.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -44,7 +44,7 @@ test("an edited absorbed message reads as deletion plus fresh", () => {
   assert.deepEqual(fresh, [asst("EDITED"), user("next")]);
 });
 
-test("a masked tool_result diffs as already absorbed (ADR 0001)", () => {
+test("a masked tool_result diffs as already absorbed", () => {
   const noted = [user("q"), toolRes("t1", "the real forty-line output")];
   const masked = [user("q"), toolRes("t1", "{#ab12 FOLDED} digest"), user("next")];
   const { fresh, deleted } = diffNew(masked, noted, noDrops);
@@ -52,7 +52,7 @@ test("a masked tool_result diffs as already absorbed (ADR 0001)", () => {
   assert.deepEqual(fresh, [user("next")]);
 });
 
-test("a masked thinking text diffs as already absorbed (ADR 0001)", () => {
+test("a masked thinking text diffs as already absorbed", () => {
   const noted = [user("q"), thinking("long reasoning")];
   const { fresh, deleted } = diffNew([user("q"), thinking("{#ab13 FOLDED}"), user("next")], noted, noDrops);
   assert.equal(deleted, false);

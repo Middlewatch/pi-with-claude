@@ -1,63 +1,50 @@
-# Hosted-tool MCP dialect — frozen wire contract
+# Hosted-tool MCP dialect: frozen wire contract
 
-**Pinned to:** `claude` 2.1.226 / Agent SDK 0.3.226.
-**Re-pinned 2026-08-31 to `claude` 2.1.252** via the native bridge
-(paid capture, `.local/evidence/2026-08-31-s3/`): the CLI still offers
-`2025-11-25` (clientInfo version 2.1.252), accepts this host's answers,
-and stamps `claudecode/toolUseId` into tools/call `_meta`.
-**Re-pinned 2026-09-01 to `claude` 2.1.258** via the native bridge
-(paid capture, `.local/evidence/2026-09-01-repin-2.1.258/`): still
-`2025-11-25` (clientInfo version 2.1.258), same handshake, same
-`_meta` stamping. Zero drift.
-**Provenance:** the observed wire, not a spec reading — the SDK-driven
-characterization capture, 2026-08-09 (`fixtures/mcp-dialect-turn.jsonl`, byte-verbatim both
-directions; raw in the untracked `.local/artifacts/characterization-2026-08-09/`). Only a
-ratified re-pin moves this file.
+**Pinned to:** `claude` 2.1.258, re-characterized 2026-09-01 through the
+native bridge with zero drift: the CLI still offers protocol version
+`2025-11-25` (clientInfo version 2.1.258), the same handshake, and the
+same `_meta` stamping.
 
-## Protocol version (contract amendment 2026-08-09)
+**Pin history.** The observed wire rather than a spec reading: first
+characterized 2026-08-09 against `claude` 2.1.226 driven by Agent SDK
+0.3.226 (`fixtures/mcp-dialect-turn.jsonl`, byte-verbatim in both
+directions). Re-pinned 2026-08-31 to 2.1.252 through the native bridge:
+the CLI still offered `2025-11-25` (clientInfo version 2.1.252), accepted
+this extension's answers, and stamped `claudecode/toolUseId` into
+`tools/call` `_meta`. Only a ratified re-pin moves this file.
 
-The CLI's `initialize` offers **`2025-11-25`**
-(`clientInfo: {"name":"claude-code","version":"2.1.226",...}`) and the
-SDK oracle answers `2025-11-25` — this host mirrors the oracle. The plan
-originally pinned the legacy `2024-11-05` from the probe; the probe's
-external server answered `2024-11-05` and was *also* accepted, so the CLI
-tolerates both. Amendment recorded in the execution log, ruled by owner
-review.
+## Protocol version
+
+The CLI's `initialize` offers `2025-11-25`
+(`clientInfo: {"name":"claude-code","version":"2.1.226",...}` at the
+first pin) and the SDK oracle answers `2025-11-25`, which this extension
+mirrors. An earlier probe's external server answered the legacy
+`2024-11-05` and was also accepted, so the CLI tolerates both.
 
 ## Transport
 
-Every message rides a `control_request` subtype `mcp_message`
+Every message rides a `control_request` of subtype `mcp_message`
 (`server_name`, `message` = JSON-RPC object) and is answered with a
 success `control_response` whose payload is
-`{"mcp_response": <JSONRPCResponse>}` (contracts/control-channel.md).
+`{"mcp_response": <JSONRPCResponse>}` (`contracts/control-channel.md`).
 
 ## Exchanges (captured, in wire order)
 
-1. `initialize` (id 0) → result
+1. `initialize` (id 0) is answered with
    `{"protocolVersion":"2025-11-25","capabilities":{"tools":{"listChanged":true}},"serverInfo":{"name":<server>,"version":"1.0.0"}}`.
-2. `notifications/initialized` (no id) — a JSON-RPC *notification*;
+2. `notifications/initialized` (no id) is a JSON-RPC notification,
    answered `{"mcp_response":{"jsonrpc":"2.0","result":{},"id":0}}`
-   verbatim (oracle behaviour; this host answers **every** notification
+   verbatim (oracle behaviour; this extension answers every notification
    that way).
-3. `tools/list` (id 1) → result `{"tools":[{name, description,
-   inputSchema, execution:{"taskSupport":"forbidden"}}]}`.
-   - `inputSchema` fidelity (schema bytes pass through raw), pinned
-     precisely: the toolhost never
-     re-marshals schema bytes through Go values, so JSON **values, key
-     order, and number literals (including >2^53) survive to the wire
-     verbatim**. The control envelope's serializer then applies
-     whitespace compaction (as the oracle's own serializer does) and
-     Go's HTML escaping (Go-specific; JSON.stringify does not escape) —
-     both semantics-preserving normalizations, verified end to end
-     (reviewer-verified). Witness at the toolhost layer:
-     `TestToolsListByteFidelity` (a Marshal-based implementation fails
-     it — caught live during the packet build).
-   - `execution.taskSupport: "forbidden"` mirrors the oracle's captured
-     answer for sdk tools.
-4. `tools/call` (id 2; `params.name`, `params.arguments`, `_meta` with
-   `claudecode/toolUseId` and `progressToken` — tolerated, unread) →
-   result `{"content": <MCP content array>}`, plus `"isError": true` when
-   the handler failed (a handler error is a result, never a session
+3. `tools/list` (id 1) is answered with `{"tools":[{name, description,
+   inputSchema, execution:{"taskSupport":"forbidden"}}]}`. `inputSchema`
+   is Pi's tool schema object, serialized with the envelope and never
+   rewritten. `execution.taskSupport: "forbidden"` mirrors the
+   oracle's captured answer for sdk tools.
+4. `tools/call` (id 2; `params.name`, `params.arguments`, and `_meta`
+   with `claudecode/toolUseId` and `progressToken`) is answered with
+   `{"content": <MCP content array>}`, plus `"isError": true` when the
+   handler failed (a handler error is a result, never a session
    failure). The CLI sends one `tools/call` at a time: the next goes out
    only after the previous result, while the model's later `tool_use`
    blocks keep streaming (`contracts/events.md`, timing facts).
@@ -65,7 +52,7 @@ success `control_response` whose payload is
 ## Error behaviour
 
 - Unknown tool name in `tools/call`: JSON-RPC error `-32602`.
-- Unknown method with an id: JSON-RPC error `-32601` (never silence).
-- Cancelled call (`control_cancel_request` → context cancellation): the
-  exchange fails at the control layer (error `control_response`), not as
-  a tool result.
+- Unknown method with an id: JSON-RPC error `-32601`, never silence.
+- Cancelled call (`control_cancel_request`): the exchange fails at the
+  control layer with an error `control_response` rather than as a tool
+  result.

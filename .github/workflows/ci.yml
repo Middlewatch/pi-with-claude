@@ -1,6 +1,6 @@
 # CI runs exactly scripts/verify.sh after environment setup, so one
 # local run reproduces CI. The pi version is pinned; bumps are
-# deliberate commits, like the SDK pin.
+# deliberate commits, like the claude pin in docs/contracts/.
 name: ci
 on:
   push:

@@ -1,5 +1,5 @@
 // Pi extension: Claude Code as a Pi model provider, in-process on the
-// native stream-json bridge (src/bridge.ts, ADR 0002). Pi owns the
+// native stream-json bridge (src/bridge.ts). Pi owns the
 // harness — system prompt, tools, transcript; the extension runs
 // `claude` as a stripped backend (AGENTS.md): no builtin tools, no
 // setting sources, the init tool surface asserted (I6). Pi's projected
@@ -500,7 +500,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
             s.parkedById.delete(c.call_id);
             // Deny-as-data: an is_error result flows to the model as an
             // error-flagged MCP result and the turn continues
-            // (spike-proven).
+            // (characterized, fixtures/denied-tool-turn.jsonl).
             entry.resolve({ content: c.content ?? [], isError: !!c.is_error });
           }
           resumed = true;
@@ -667,7 +667,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
           // that stopped announcing init would otherwise pass unasserted.
           if (!s.initSeen) throw new Error("pi-with-claude: turn ended with no system/init frame, tool surface unasserted (I6)");
           // An interrupted turn comes back as error_during_execution,
-          // not a distinct subtype (spike-characterized); it is Pi's
+          // not a distinct subtype (docs/contracts/events.md); it is Pi's
           // aborted stop only when this host actually interrupted.
           finalizeTurn(
             frame.subtype === "success"

@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """fake_claude.py — the gate's scripted claude.
 
-Provenance: copied 2026-08-31 from claude-go tests/fake_claude.py
-(characterized against the real `claude` 2.1.226 there); the fixtures
-under ../fixtures travelled with it. In this repo the client on the
-other end of the wire is the native bridge (src/bridge.ts); dialect
-drift found while characterizing the real CLI is fixed here, with the
-delta noted against the claude-go original.
+The client on the other end of the wire is the native bridge
+(src/bridge.ts). Dialect drift found while characterizing the real CLI
+is fixed here against a fresh capture (fixtures/README.md).
 
-Replays frames characterized from the real `claude` 2.1.226 so the library
-under test sees the real wire with no token spent and no `claude`
-installed. The library never special-cases this script: the bridge's
+Replays frames characterized from the real `claude` (2.1.226 base set,
+2.1.258 additions) so the extension under test sees the real wire with
+no token spent and no `claude` installed. The extension never
+special-cases this script: the bridge's
 claudePath option points straight at it and it is spawned with the
 real argv.
 

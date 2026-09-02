@@ -1,45 +1,16 @@
-# Bridge protocol v1 — our own frozen wire contract
+# Bridge v1: the neutral message schema and restart taxonomy
 
-**Owner:** this repository (not a vendor pin). Version: 1.
-**Consumers:** `claude-go bridge` (server side), the Pi extension
-(`adapters/pi/`), any host embedding a session without linking Go.
-
-One bridge process serves **one** session, opened by the first `open`
-frame (one session per process was the ruled design); ids are additive
-in a future version, never retrofitted.
-Transport is NDJSON on stdio, same framing rules as the claude wire
-(one JSON object per line; blank lines carry nothing; CRLF tolerated).
-Every frame is one JSON object whose `type` field names the frame; the
-frame's other fields sit beside it at the top level. One frame is at
-most 16 MiB; an over-cap frame is a fatal `error`. A `turn` or
-`interrupt` frame before `open`, or a second `open`, is a fatal
-`error`; `close` (explicit or as stdin EOF) is valid at any time.
+**Owner:** this repository (a design contract, not a vendor pin).
+Version: 1. `src/projection.ts` implements the schema and the diff,
+`src/extension.ts` the turn loop, and `tests/projection.test.ts` uses
+the taxonomy below as its case source.
 
 ## Design rule
 
-The host sends its **full transcript projection** every turn; the bridge
-prefix-matches against what it has itself produced and consumed. All
-hard logic (matching, restarts, tool bookkeeping) lives on the Go side —
-a host never tracks pending calls.
-
-## Frames, host → bridge
-
-| Frame | Fields | Semantics |
-|---|---|---|
-| `open` | `options?: {model?, system_prompt?, claude_path?, permission_mode?, effort?}`, `tools?: [ToolDescriptor]` | Spawn the session (Pipe profile). `effort` is the CLI's reasoning effort (`low`\|`medium`\|`high`\|`xhigh`\|`max`; omitted or empty leaves the CLI default) and is **session-scoped**, so a host changing it must close and reopen — the same obligation a changed tool set carries. `tools` are proxy descriptors: `{name, description, input_schema}` with the schema passed through raw. Answered by `opened` or fatal `error`. |
-| `turn` | `messages: [Message]`, `tools?: [ToolDescriptor]` | The full projection. A `tools` set that no longer matches the registered set follows the same degraded path as a prefix mismatch — restart; and because a restart reopens from the original `open` frame, a host whose tool set has genuinely changed must close and reopen the bridge — retrying the drifted set can never converge. |
-| `interrupt` | — | Control-channel interrupt of the in-flight turn (never a kill). With no turn in flight it is answered by the non-fatal `error` whose message is pinned verbatim as `interrupt with no turn in flight`, so a host can discard the stale answer of a lost interrupt race. |
-| `close` | — | End the session and the process; also implied by stdin EOF. |
-
-## Frames, bridge → host
-
-| Frame | Fields | Semantics |
-|---|---|---|
-| `opened` | `init?: {model, tools, session_id}` | The session is live. Per the characterized init timing (`contracts/events.md`), `init` is null until the first turn ran; a host needing the surface reads it from the first `turn_end`. |
-| `delta` | `kind: "text"\|"thinking"`, `text` | Streamed increments during a turn. |
-| `turn_end` | `message: Message`, `reason: "end_turn"\|"tool_calls"\|"interrupted"\|"error"`, `usage?: {input, output, cache_read, cache_creation, total_cost_usd, turns, context_tokens?}`, `init?` | The assistant message produced this turn. `tool_calls`: the message ends in `tool_call` blocks the HOST must run; their results come back inside the next `turn` frame's projection. `usage` carries per-turn tokens plus the cumulative cost estimate (I7: estimate). The per-turn token fields aggregate every request inside a tool-loop turn, so their sum overstates context; `context_tokens`, when present, is the CLI's own current context occupancy (`get_context_usage`) and is the field a host gauges occupancy from. `init` snapshots the latest system/init. |
-| `restarted` | `reason` | The degraded path ran: session closed and reopened clean, nothing replayed. The host's next `turn` still sends its full projection; history before the restart is the host's to keep or drop. |
-| `error` | `message`, `fatal: bool` | Fatal errors end the process nonzero. |
+Pi hands the extension its full transcript every turn. The extension
+keeps a mirror of what the live `claude` session has absorbed and diffs
+the transcript against it, so Pi never tracks pending calls and the
+session never receives history the model has not lived.
 
 ## The neutral message schema
 
@@ -54,105 +25,97 @@ a host never tracks pending calls.
  ]}
 ```
 
-`image` (added 2026-08-28, additive in v1) appears in user messages
-only — the bridge never produces one — and reaches the wire as an
-Anthropic base64 image source block. A pre-amendment bridge answers it
-with the unknown-block restart below, which is the compatible
-degradation. The bridge forwards `media_type` and `data` unvalidated:
-the CLI and the API own rejection of malformed or over-limit images,
-and their refusal surfaces as an ordinary error turn. Because the host
-re-sends its full projection every turn, an absorbed image's bytes ride
-every later `turn` frame — hosts budget against the 16 MiB frame cap
-accordingly. A `tool_result`'s `content` is the raw MCP content array
-and passes through untouched, so MCP image blocks
-(`{"type": "image", "data": "<base64>", "mimeType": "..."}`) inside it
-reach the model without any bridge involvement.
+Pi's history projects to this schema, and the mirror notes assistant
+messages through the same projection, so the two forms are identical by
+construction. `image` appears in user messages only and reaches the wire
+as an Anthropic base64 image source block, forwarded unvalidated: the CLI
+and the API own rejection of malformed or over-limit images, and their
+refusal surfaces as an ordinary error turn. A `tool_result`'s `content`
+is the raw MCP content array and passes through untouched, so MCP image
+blocks (`{"type": "image", "data": "<base64>", "mimeType": "..."}`) inside
+it reach the model with no extension involvement. Assistant content
+blocks outside the schema are tolerated on the wire and never projected
+(I4).
 
-Unknown block types or roles in the projection are a prefix mismatch by
-definition (the bridge could never have produced them) → restart.
+## Identity keys
 
-## Prefix-match semantics (pinned)
+The mirror diffs by message identity rather than exact content. A
+`tool_result` reduces to `{type, call_id, is_error}` and a `thinking`
+block to `{type}`; every other block keeps its full content. Keys
+compare by JSON structural equality (values and order rather than
+bytes), so `1` and `1.0` are one identity. Folding extensions rewrite absorbed history in place,
+masking a stale tool result's content or a thinking block's text to a
+short digest, and the stateful CLI can never be reseeded with the edited
+version. Under identity keys a masked copy diffs as history already
+absorbed, the wire keeps the originals, and the session continues. The
+trade-off is that a genuine in-place edit to those two fields is
+invisible; no known Pi source produces one apart from folding.
 
-The bridge keeps `sent`: a verbatim mirror of the host-visible
-projection. Assistant messages are absorbed as produced; an accepted
-`turn` suffix is absorbed with its message and block structure
-preserved exactly as the host sent it — never any merged or rewritten
-wire form — which is what keeps the host's next full projection
-prefix-matching. On `turn`:
+## Prefix-match semantics
 
-1. `len(messages) < len(sent)` → **restart** ("history shrank").
-2. Any `messages[i] != sent[i]` (structural JSON equality — values and
-   order, not bytes; hosts re-serialize. Numbers compare as
-   full-precision literals: `1` equals `1.0`, and distinct integers
-   beyond float64 precision never collapse into a match. Fields outside
-   the pinned schema are dropped on decode — I4 — and take no part in
-   equality) → **restart** ("prefix mismatch").
-3. The suffix `messages[len(sent):]` may contain, in order:
-   - user `tool_result` blocks — each must complete a pending proxy call
-     by `call_id`; an unknown or already-completed id → **restart**
-     (absorbing a result retires its id, so a stale re-send restarts);
-   - user `text` and `image` blocks — forwarded as one user turn on the
-     wire in suffix order, adjacent text blocks newline-merged into one
-     (text-only suffixes therefore merge exactly as before), and any
-     merged text run still empty after merging is dropped from the wire
-     (the API rejects empty text blocks); the merge is invisible to the
-     host because absorption preserves the suffix's original structure;
-   - anything else (assistant/system messages the bridge never produced)
-     → **restart**.
-4. A turn that yields nothing to run — no completions and no user
-   content (a lone empty merged text is no content) — is an `error`
-   frame (`fatal: false`); its suffix, if any, is still absorbed so the
-   projections stay aligned.
-5. While a model turn is in flight (after a `tool_calls` pause), only a
-   suffix of completions is valid — it resumes the turn. A suffix
-   carrying user content (text or image) during flight is a non-fatal `error` with nothing
-   applied (completions in the same frame included); the host recovers
-   by re-sending the completions alone, then sending its text in a
-   fresh `turn` after the resumed flight's `turn_end`. Between turns a
-   suffix carries user content alone: a `tool_result` answering a call
-   whose turn already ended (`interrupted`/`error`) is stale, and the
-   degraded restart path answers it.
+The extension keeps `noted` (the messages the live session has absorbed)
+and `dropped` (history cut away at a fresh start, so it is never
+re-flagged as new). Each turn diffs Pi's projection against both by
+identity-key membership, in projection order. Membership rather than
+index order is a deliberate relaxation of the index-wise rule: Pi does
+not reorder history, and a reordered history would surface as "nothing
+new to run" rather than as a replay. The diff yields the fresh suffix and
+whether any noted message went missing. Then:
 
-Restart mechanics: close the session (full teardown), reopen with the
-`open` frame's options and tools, emit `restarted`. Nothing is replayed:
-the model's context restarts clean, which is the honest degraded mode —
-silently replaying an edited history would misrepresent it as lived
-context.
+1. A noted message missing from the projection means Pi rewrote absorbed
+   history (branch navigation, compaction). The session reopens clean
+   and takes a **fresh start**.
+2. Fresh content with an assistant role is history no suffix can carry.
+   On a session that has noted nothing (a resumed Pi session on a new
+   process) it takes a fresh start in place; mid-session it reopens the
+   session first.
+3. While a model turn is paused on tool calls, only completions go down.
+   User text or images in the suffix are withheld and, being absent from
+   the mirror, resurface as fresh suffix on the next call. Each
+   completion must answer a parked call by `call_id`; an unknown or
+   already-completed id reopens the session with nothing applied.
+4. Between turns, the suffix carries user content: `text` and `image`
+   blocks forwarded as one user turn in suffix order, adjacent text
+   blocks newline-merged into one, and an empty merged run dropped (the
+   API rejects empty text blocks). The merge is invisible to Pi because
+   the mirror notes the suffix's original structure. A `tool_result`
+   between turns answers a call whose turn already ended, is stale, and
+   reopens the session.
+5. A turn that yields nothing to run (no completions and no user
+   content) is an error to Pi, which names the cause: a fresh start that
+   cannot answer an in-flight call, a paused turn holding steering text,
+   or plain "nothing new to run".
+
+A fresh start trims the projection to what a brand-new session can
+honestly receive: the trailing run of user messages, minus any leading
+`tool_result` blocks (their calls cannot exist in a fresh session).
+Everything cut away goes to `dropped`. Nothing is replayed, and the
+model's context restarts clean; silently replaying an edited history
+would misrepresent it as lived context.
 
 ## Proxy-call correlation
 
-The MCP seam the CLI speaks carries no tool_use id, so the bridge binds
-a dispatched proxy call to a `tool_call` block by **tool name**: the
-oldest unclaimed block whose name matches the call's registered name
-(directly, or as the wire form `mcp__<server>__<name>`), with input
-equality preferred when several unclaimed blocks share the name. Two
-concurrent calls with the same name *and* the same input are
-indistinguishable at this seam and interchangeable by construction, so
-the residual ambiguity is harmless. A rebuilder binds by name, not by
-bare arrival order: the CLI dispatches hosted calls one at a time
-(`tools/call` k+1 only after result k, characterized at 2.1.258;
-`contracts/events.md`, timing facts) while the model's later blocks
-keep streaming, and receivers dispatch requests on independent tasks,
-so the order a call arrives in says nothing about which block it
-belongs to.
+The CLI stamps the model's `tool_use` id into each `tools/call`'s `_meta`
+(`claudecode/toolUseId`, `contracts/mcp-dialect.md`), and the extension
+parks the handler under that id. A handler dispatched without the stamp
+is bound by **tool name** at the pause: the oldest unbound block whose
+name matches the call's (directly, or as the wire form
+`mcp__pi__<name>`), with input equality preferred when several share the
+name. Two concurrent calls with the same name and the same input are
+indistinguishable at this seam and interchangeable by construction.
+Arrival order says nothing about which block a call belongs to, because
+the CLI dispatches hosted calls one at a time while the model's later
+blocks keep streaming (`contracts/events.md`, timing facts).
 
 ## Turn boundaries
 
-Each accepted `turn` frame that runs something is answered by exactly
-one `turn_end` (or `restarted`/`error`). A model turn that calls proxy
-tools pauses at the first dispatched call: `turn_end`
-(`reason: "tool_calls"`) carries the assistant blocks streamed so far
-whose calls the CLI has dispatched. A `tool_use` block already streamed
-but not yet dispatched opens the next stretch's message instead, since
-the CLI dispatches it only after the earlier results (`contracts/events.md`,
-timing facts); a stretch that waited for it would deadlock. The
-still-in-flight model turn resumes when a later `turn` frame completes
-the calls, and that resumed stretch is answered by its own `turn_end`. Where the CLI turn splits
-across such pauses, each `turn_end.message` is one neutral assistant
-message, and the projection records them exactly as emitted.
-
-While a model turn is in flight, a `turn` frame whose suffix carries
-user content is a non-fatal `error` (nothing applied); a suffix of only
-completions is the resume path. Assistant content blocks outside the
-neutral schema (I4: the wire moves) are not projected — they are
-tolerated on the claude wire and invisible to the host.
+Each turn Pi sends is answered by one assistant message. A model turn
+that calls hosted tools pauses at the first dispatched call: the message
+handed to Pi carries the blocks streamed so far whose calls the CLI has
+dispatched. A `tool_use` block already streamed but not yet dispatched is
+carried into the next stretch's message instead, since the CLI dispatches
+it only after the earlier results, and a stretch that waited for it would
+deadlock. The paused turn resumes when a later Pi turn completes the
+calls, and the resumed stretch is answered by its own assistant message.
+Where the CLI turn splits across such pauses, each stretch is one neutral
+assistant message, and the mirror records them exactly as handed over.
