@@ -174,17 +174,17 @@ class Session {
   }
 }
 
-let session: Session | null = null;
+// What one registration owns: the live session, and the account the
+// NEXT opened session authenticates as (null is the ambient
+// environment). The account is read at the start of each turn, so a
+// switch lands on a turn boundary rather than mid-session. `undefined`
+// means not yet resolved: resolution can spawn a probe, and an
+// extension factory may run in an invocation that never starts a
+// session, so it waits for the first turn or the first menu.
+type Provider = { session: Session | null; account: string | null | undefined };
 
-// The account the NEXT opened session authenticates as; null is the
-// ambient environment. Read at the start of each turn, so a switch
-// lands on a turn boundary rather than mid-session. `undefined` means
-// not yet resolved: resolution can spawn a probe, and an extension
-// factory may run in an invocation that never starts a session, so it
-// is deferred to the first turn or the first menu.
-let activeAccount: string | null | undefined;
-const currentAccount = (): string | null =>
-  activeAccount === undefined ? (activeAccount = selected()) : activeAccount;
+const currentAccount = (p: Provider): string | null =>
+  p.account === undefined ? (p.account = selected()) : p.account;
 
 // ---------------------------------------------------------------------
 // Wire translation at the claude boundary.
@@ -276,7 +276,7 @@ function effortOf(options: Json): string {
 // ---------------------------------------------------------------------
 // streamSimple: one session turn per call.
 
-function streamClaude(model: Json, context: Json, options?: Json) {
+function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
   debug("streamSimple called", model?.id, "messages:", context?.messages?.length, "tools:", context?.tools?.length);
   const stream = makeEventStream();
 
@@ -313,7 +313,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
 
       // Resolved once per turn: a switch made mid-turn takes effect on
       // the next one, never under an in-flight session.
-      const accountDir = currentAccount();
+      const accountDir = currentAccount(p);
       const effort = effortOf(options);
       const expectedInitTools: string[] = tools.map((t: Json) => wireToolName(t.name));
       let swapped = false; // this turn reopened for a model/account/effort/tool-set change
@@ -334,40 +334,40 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           s.busy = false;
           s.bridge.unref();
         }
-        session?.close();
-        session = openSession();
-        session.busy = true;
+        p.session?.close();
+        p.session = openSession();
+        p.session.busy = true;
         ownsBusy = true;
-        session.bridge.ref();
-        return session;
+        p.session.bridge.ref();
+        return p.session;
       };
 
-      if (!session || session.dead()) {
-        session = openSession();
+      if (!p.session || p.session.dead()) {
+        p.session = openSession();
       } else if (
-        session.modelId !== model.id ||
-        session.effort !== effort ||
-        session.toolsSig !== toolsSig ||
-        session.configDir !== accountDir
+        p.session.modelId !== model.id ||
+        p.session.effort !== effort ||
+        p.session.toolsSig !== toolsSig ||
+        p.session.configDir !== accountDir
       ) {
         // Model and effort are pinned at spawn (argv-scoped), the
         // account in the child's environment, and the tool surface by
         // the session's MCP handshake, so the only convergent move is a
         // full reopen — at the cost of a fresh model context.
         debug(
-          session.configDir !== accountDir
+          p.session.configDir !== accountDir
             ? "account swap: reopening session"
-            : session.modelId !== model.id
+            : p.session.modelId !== model.id
               ? "model swap: reopening session"
-              : session.effort !== effort
+              : p.session.effort !== effort
                 ? "effort change: reopening session"
                 : "tool set drift: reopening session",
         );
-        session.close();
-        session = openSession();
+        p.session.close();
+        p.session = openSession();
         swapped = true;
       }
-      s = session;
+      s = p.session;
       if (s.busy) throw new Error("pi-with-claude: concurrent turns on one session are unsupported");
       // The event loop holds only while a turn is in flight: ref on
       // entry, unref when the stream settles, so a host like `pi -p`
@@ -382,7 +382,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // result below and is mapped back to Pi's aborted stop.
       onAbort = () => {
         debug("interrupt requested");
-        session?.bridge.interrupt().catch(() => {});
+        p.session?.bridge.interrupt().catch(() => {});
       };
       options?.signal?.addEventListener("abort", onAbort, { once: true });
 
@@ -748,6 +748,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
 
 export default function (pi: ExtensionAPI) {
   debug("extension registering");
+  const p: Provider = { session: null, account: undefined };
   pi.registerProvider("pi-with-claude", {
     name: "Claude Code (pi-with-claude)",
     // Placeholders: the spawned claude authenticates itself (I1);
@@ -798,14 +799,14 @@ export default function (pi: ExtensionAPI) {
     // the runtime surface is the duck type makeEventStream provides.
     // Constructing the real class would mean a runtime import of the Pi
     // packages, which this extension deliberately never does.
-    streamSimple: streamClaude as Json,
+    streamSimple: ((model: Json, context: Json, options?: Json) => streamClaude(p, model, context, options)) as Json,
   });
 
   // The child is session-scoped: /new, /resume, /fork, and exit all
   // pass here, and the next turn opens fresh from Pi's new history.
   pi.on("session_shutdown", async () => {
-    session?.close();
-    session = null;
+    p.session?.close();
+    p.session = null;
   });
 
   pi.registerCommand("pi-with-claude", {
@@ -822,7 +823,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`pi-with-claude: unknown section ${JSON.stringify(section)}`, "warning");
         return;
       }
-      await accountMenu(ctx);
+      await accountMenu(p, ctx);
     },
   });
 }
@@ -831,7 +832,7 @@ export default function (pi: ExtensionAPI) {
 // vendor's own status command, never a credential file). Selecting an
 // account does not disturb the live session — the next turn sees the new
 // value and reopens onto it.
-async function accountMenu(ctx: Json) {
+async function accountMenu(p: Provider, ctx: Json) {
   const roster = accounts();
   if (roster.length === 0) {
     ctx.ui.notify(
@@ -842,20 +843,20 @@ async function accountMenu(ctx: Json) {
     return;
   }
   if (pinned()) {
-    ctx.ui.notify(`pi-with-claude: account pinned by PI_WITH_CLAUDE_ACCOUNT (${currentAccount()})`, "warning");
+    ctx.ui.notify(`pi-with-claude: account pinned by PI_WITH_CLAUDE_ACCOUNT (${currentAccount(p)})`, "warning");
     return;
   }
   // With nothing selected the child runs on the ambient environment; mark
   // whichever roster entry that resolves to, so the menu shows what is
   // actually in force rather than an empty list.
-  const active = currentAccount() ?? ambient();
+  const active = currentAccount(p) ?? ambient();
   const rows = roster.map((a) => ({ dir: a.dir, text: `${a.dir === active ? "● " : "  "}${a.label}` }));
   const choice = await ctx.ui.select("Account", rows.map((r) => r.text));
   if (!choice) return;
   const picked = rows.find((r) => r.text === choice);
   if (!picked || picked.dir === active) return;
   selectAccount(picked.dir);
-  activeAccount = picked.dir;
+  p.account = picked.dir;
   debug("account selected:", picked.dir);
   ctx.ui.notify(
     `pi-with-claude account: ${picked.text.slice(2)} — takes effect next turn (the model's context restarts).`,
