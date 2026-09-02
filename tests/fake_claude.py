@@ -47,11 +47,19 @@ Environment knobs (all optional, set by harnesses):
                        interrupt is acked with the characterized receipt
                        and the turn ends with the captured interrupted tail
                        (fixtures/interrupt-turn.jsonl cli frames)
+  FAKE_CLAUDE_CALL_DELAY_MS=N
+                       sleep N ms before dispatching each tools/call, so
+                       the frames replayed ahead of it reach the client
+                       as their own chunk first. The real CLI has this
+                       gap between a block's assistant frame and its
+                       dispatch, and later blocks stream into it (claude
+                       2.1.258, characterized 2026-09-02)
 """
 
 import json
 import os
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_FIXTURE = os.path.join(HERE, os.pardir, "fixtures", "turn-deltas.jsonl")
@@ -282,6 +290,9 @@ def replay_segment(io, frames, flags, hosted, server, argv, hold_after):
                                    "arguments": updated if updated is not None else {"text": "tool drill"},
                                    "_meta": message.get("params", {}).get("_meta", {})},
                         "jsonrpc": "2.0", "id": message.get("id", 2)}
+                delay_ms = int(os.environ.get("FAKE_CLAUDE_CALL_DELAY_MS", "0"))
+                if delay_ms:
+                    time.sleep(delay_ms / 1000)
                 io.mcp_exchange(server, call)
             continue
         line = rewrite_init(out, flags, hosted["wire"])

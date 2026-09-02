@@ -108,6 +108,12 @@ class Session {
   // the pause binds it to a block by name.
   parkedById = new Map<string, ToolCallRequest>();
   parkedUnbound: ToolCallRequest[] = [];
+  // tool_use blocks the stream delivered whose calls the CLI has not
+  // dispatched yet. It dispatches hosted calls one at a time while the
+  // model keeps streaming the later blocks (claude 2.1.258), so a
+  // paused stretch hands Pi the calls that have handlers and these
+  // open the next stretch's blocks.
+  carried: Json[] = [];
 
   constructor(cfg: {
     model: string;
@@ -568,15 +574,29 @@ function streamClaude(model: Json, context: Json, options?: Json) {
       // The turn's authoritative assistant blocks: the CLI emits one
       // assistant frame per completed content block (characterized,
       // fixtures/turn-deltas.jsonl); their concatenation is the message
-      // Pi stores and re-projects next turn.
-      const turnBlocks: Json[] = [];
+      // Pi stores and re-projects next turn. A stretch opens with the
+      // tool_use blocks the previous pause held back.
+      const turnBlocks: Json[] = s.carried;
+      s.carried = [];
 
       // finalizeTurn closes the stretch — at a tool-call pause or the
       // result — with the accumulated assistant frames as the
       // authoritative message Pi stores and re-projects next turn.
       const finalizeTurn = (reason: string) => {
         closeBlock();
-        if (reason === "interrupted" || turnBlocks.length === 0) {
+        // At a tool-call pause the stretch carries the blocks whose calls
+        // are dispatched; tool_use blocks still awaiting their dispatch
+        // open the next stretch. Any other ending drops them: the model
+        // turn they belonged to is over.
+        let handed = turnBlocks;
+        if (reason === "tool_calls") {
+          const held = (b: Json) => b.type === "tool_use" && !s!.parkedById.has(b.id);
+          s!.carried = turnBlocks.filter(held);
+          handed = turnBlocks.filter((b: Json) => !held(b));
+        } else {
+          s!.carried = [];
+        }
+        if (reason === "interrupted" || handed.length === 0) {
           // An interrupted turn's trailing block never gets its
           // assistant frame; the delta-built content IS the partial
           // message the model lived, so it survives as-is.
@@ -591,11 +611,11 @@ function streamClaude(model: Json, context: Json, options?: Json) {
           // and the summary must not be copied into the empty one. A
           // turn that never streamed thinking stays honestly empty —
           // nothing is invented.
-          const carried = new Set(turnBlocks.filter((b: Json) => b.type === "thinking" && b.thinking).map((b: Json) => b.thinking));
+          const framed = new Set(handed.filter((b: Json) => b.type === "thinking" && b.thinking).map((b: Json) => b.thinking));
           const unclaimed = output.content
-            .filter((c: Json) => c.type === "thinking" && c.thinking && !carried.has(c.thinking))
+            .filter((c: Json) => c.type === "thinking" && c.thinking && !framed.has(c.thinking))
             .map((c: Json) => c.thinking);
-          output.content = wireContentToPi(turnBlocks);
+          output.content = wireContentToPi(handed);
           for (const c of output.content) {
             if (c.type === "thinking" && !c.thinking && unclaimed.length) c.thinking = unclaimed.shift();
           }
@@ -611,26 +631,24 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         output.stopReason = REASON_TO_STOP[reason] ?? "error";
       };
 
-      // The pause condition: the model's message ended in tool_use
-      // blocks and every one of them has a parked handler (the CLI
-      // dispatches only after the message completes, so all blocks are
-      // on the stream before the first handler parks). Handlers the
-      // CLI dispatched without a _meta tool_use id are bound to blocks
-      // by name, input equality preferred — two concurrent calls with
-      // the same name and input are interchangeable by construction.
+      // The pause condition: a tool_use block on the stream has a parked
+      // handler. The CLI dispatches hosted calls one at a time —
+      // tools/call k+1 only after result k — while the model keeps
+      // streaming the later blocks (claude 2.1.258, characterized
+      // 2026-09-02 from two frozen sessions; fixtures/
+      // tool-call-turn-serial.jsonl). Waiting for every streamed block
+      // to park would wait on a dispatch the CLI makes only after a
+      // result Pi cannot produce until this stretch ends, so the
+      // stretch hands over the calls that have handlers and carries the
+      // rest. Handlers the CLI dispatched without a _meta tool_use id
+      // are bound to blocks by name, input equality preferred — two
+      // concurrent calls with the same name and input are
+      // interchangeable by construction.
       const toolUseBlocks = () => turnBlocks.filter((b: Json) => b.type === "tool_use");
-      const pauseReady = (): boolean => {
-        const blocks = toolUseBlocks();
-        if (blocks.length === 0) return false;
-        const unbound = [...s!.parkedUnbound];
-        for (const b of blocks) {
-          if (s!.parkedById.has(b.id)) continue;
-          const i = unbound.findIndex((e) => e.name === plainToolName(b.name));
-          if (i < 0) return false;
-          unbound.splice(i, 1);
-        }
-        return true;
-      };
+      const pauseReady = (): boolean =>
+        toolUseBlocks().some(
+          (b: Json) => s!.parkedById.has(b.id) || s!.parkedUnbound.some((e) => e.name === plainToolName(b.name)),
+        );
       const bindParked = () => {
         for (const b of toolUseBlocks()) {
           if (s!.parkedById.has(b.id)) continue;
@@ -643,7 +661,18 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         }
       };
 
-      for (;;) {
+      // A pause is a stretch boundary, so the decision is made with the
+      // stream still open. Blocks carried in from the previous stretch
+      // may already have their handler.
+      const tryPause = (): boolean => {
+        if (!pauseReady()) return false;
+        bindParked();
+        finalizeTurn("tool_calls");
+        debug("tool pause:", output.content.filter((c: Json) => c.type === "toolCall").length, "call(s) parked,", s!.carried.length, "carried");
+        return true;
+      };
+
+      while (!tryPause()) {
         const frame = await s.read();
         debug("frame:", frame.type, frame.subtype ?? frame.event?.type ?? "");
         if (frame.type === "stream_event") {
@@ -705,13 +734,7 @@ function streamClaude(model: Json, context: Json, options?: Json) {
         }
         // system/status, user echoes, rate_limit_event, unknown types:
         // tolerated. __tool_parked exists purely to re-run the pause
-        // check below.
-        if ((frame.type === "assistant" || frame.type === "__tool_parked") && pauseReady()) {
-          bindParked();
-          debug("tool pause:", toolUseBlocks().length, "call(s) parked");
-          finalizeTurn("tool_calls");
-          break;
-        }
+        // check at the top of the loop.
       }
 
       if (output.stopReason === "pending") throw new Error("session stream ended without a stop reason");

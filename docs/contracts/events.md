@@ -40,6 +40,17 @@ other fixture frame is captured verbatim).
   (its `control_response` carries account/model/command info — see
   `contracts/control-channel.md` when it lands). The control channel works
   pre-input; the event stream starts with the first turn.
+- **Hosted tool calls dispatch one at a time while the model keeps
+  streaming.** At 2.1.258 the `tools/call` for a `tool_use` block follows
+  that block's `assistant` frame, and `tools/call` k+1 goes out only after
+  result k. Later blocks keep streaming meanwhile: their
+  `content_block_*` and `assistant` frames arrive while call 1 is in
+  flight. A consumer that waits for every streamed `tool_use` block to be
+  dispatched before answering the current call deadlocks whenever a later
+  block finishes streaming first, which is what a slow first tool
+  guarantees (two frozen Pi sessions, 2026-09-02;
+  `.local/evidence/2026-09-02-serial-dispatch/`). Regression shape:
+  `fixtures/tool-call-turn-serial.jsonl`.
 
 ## Depended-on families
 
@@ -109,6 +120,7 @@ decode tests exercise them.
 | `tool-call-turn.jsonl` | full in-process tool turn incl. control_request frames in stream position | leg B stdout |
 | `tool-call-turn-empty-thinking.jsonl` | as above, with the assistant messages' `thinking` blanked: the reasoning-model shape where the final message reports the block but not its text, while the deltas carried it | derived from `tool-call-turn.jsonl` |
 | `tool-call-turn-thinkless.jsonl` | as above with the thinking `stream_event`s also removed: an empty thinking block with nothing behind it to recover | derived from `tool-call-turn-empty-thinking.jsonl` |
+| `tool-call-turn-serial.jsonl` | one message, three `tool_use` blocks (indices 1..3) in the 2.1.258 wire order: each block's `assistant` frame, then its `tools/call`, with blocks 2 and 3 fully streamed before call 2 exists. `tests/fake_claude.py` blocks at each `tools/call` until answered, so the losing race is deterministic; `FAKE_CLAUDE_CALL_DELAY_MS` keeps the frames ahead of each call in their own chunk | derived from `tool-call-turn.jsonl` (`.local/evidence/2026-09-02-serial-dispatch/derive-serial.py`) |
 | `tool-call-turn-double-thinking.jsonl` | two thinking blocks in one message: index 0 an empty signed block (one empty `thinking_delta`, signature, empty assistant frame), index 1 the summary carrying the text, tool_use at index 2. The shape fable 5.1 emits at high effort (CLI 2.1.258 transcript, 2026-09-02: `apiBlockIndex` 0/1/2 with distinct signatures, in all 615 messages where a thinking block carried text at `thinking_tokens` > 0; the ~40 single text-bearing blocks all sat at `thinking_tokens` 0); haiku and fable on trivial prompts never produced it under the bridge (`.local/evidence/2026-09-02-double-thinking/`) | derived from `tool-call-turn-empty-thinking.jsonl` |
 | `denied-tool-turn.jsonl` | full dontAsk denial turn: tool_use, `system/permission_denied`, denial tool_result, result | leg A turn 2 |
 | `result-usage.jsonl` | three verbatim result frames (per-turn + cumulative fields) | legs A+B |

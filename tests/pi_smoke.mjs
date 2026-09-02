@@ -200,6 +200,55 @@ if (phase === "--double-thinking") {
   process.exit(0);
 }
 
+if (phase === "--serial-dispatch") {
+  // One message, three tool_use blocks. The CLI dispatches hosted calls
+  // one at a time (tools/call k+1 only after result k) while the model
+  // keeps streaming the later blocks, so blocks 2 and 3 are on the
+  // stream before call 2 exists (claude 2.1.258, characterized
+  // 2026-09-02 from two frozen sessions). Each stretch must hand Pi the
+  // calls that have handlers and hold the rest; waiting for every
+  // streamed block to park deadlocks — the CLI sends the next park only
+  // after a result Pi cannot produce until the stretch ends.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "add three pairs", timestamp: Date.now() }],
+  };
+  // A hung stretch is the failure under test: bound each one well
+  // inside the parent's child timeout so red reads as red.
+  const deadline = (p, what) =>
+    Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} hung for 10 s`)), 10000))]);
+  const seen = [];
+  const stretches = [];
+  let msg = await deadline(turnOf(cfg, model, ctx), "first stretch").catch((e) => fail(e.message));
+  while (msg.stopReason === "toolUse") {
+    const calls = msg.content.filter((c) => c.type === "toolCall");
+    if (calls.length === 0) fail("toolUse stop with no toolCall block");
+    stretches.push(calls.map((c) => c.id));
+    if (stretches.length > 3) fail(`more stretches than calls: ${JSON.stringify(stretches)}`);
+    ctx.messages.push(msg);
+    for (const call of calls) {
+      seen.push(call.id);
+      ctx.messages.push({
+        role: "toolResult", toolCallId: call.id, toolName: call.name,
+        content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now(),
+      });
+    }
+    msg = await deadline(turnOf(cfg, model, ctx), `stretch after ${seen.length} result(s)`).catch((e) => fail(e.message));
+  }
+  if (msg.stopReason !== "stop") fail(`final stretch stopReason ${msg.stopReason}: ${msg.errorMessage ?? ""}`);
+  const want = ["toolu_serial_1", "toolu_serial_2", "toolu_serial_3"];
+  if (seen.join() !== want.join()) fail(`calls reached the host as ${JSON.stringify(seen)}, want ${JSON.stringify(want)} once each in wire order`);
+  // Under serial dispatch exactly one call has a handler per stretch;
+  // a stretch carrying more would hand Pi a call nothing can answer.
+  if (!stretches.every((s) => s.length === 1)) fail(`stretches ${JSON.stringify(stretches)}, want one dispatched call each`);
+  checkOccupancy(msg, "serial-dispatch final stretch");
+  console.log(`pi_smoke serial-dispatch: OK — ${seen.length} calls over ${stretches.length} stretches`);
+  process.exit(0);
+}
+
 if (phase === "--thinkless") {
   // No deltas ever carried the thinking text: nothing to recover, the
   // block stays honestly empty, and the mirror still matches across
@@ -706,12 +755,16 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
   if (count(trace, /resumed 1 tool call\(s\)/g) !== 1) fail("deny phase saw no resume");
   if (count(trace, /reopening session/g) !== 0) fail("deny phase reopened — deny must flow as data");
 }
-for (const [flag, fixture] of [
+for (const [flag, fixture, extra] of [
   ["--empty-thinking", "tool-call-turn-empty-thinking.jsonl"],
   ["--thinkless", "tool-call-turn-thinkless.jsonl"],
   ["--double-thinking", "tool-call-turn-double-thinking.jsonl"],
+  // The dispatch gap is what the serial phase is about: without it the
+  // fake's whole flush parses in one chunk and every park lands before
+  // the turn loop sees the block, which hides the race.
+  ["--serial-dispatch", "tool-call-turn-serial.jsonl", { FAKE_CLAUDE_CALL_DELAY_MS: "100" }],
 ]) {
-  const { trace } = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture) });
+  const { trace } = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture), ...(extra ?? {}) });
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
     if (count(trace, pattern) !== 0) fail(`${flag} took a ${label} — the mirror mismatched across the tool loop`);
   }

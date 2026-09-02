@@ -58,7 +58,9 @@ success `control_response` whose payload is
    `claudecode/toolUseId` and `progressToken` — tolerated, unread) →
    result `{"content": <MCP content array>}`, plus `"isError": true` when
    the handler failed (a handler error is a result, never a session
-   failure).
+   failure). The CLI sends one `tools/call` at a time: the next goes out
+   only after the previous result, while the model's later `tool_use`
+   blocks keep streaming (`contracts/events.md`, timing facts).
 
 ## Error behaviour
 

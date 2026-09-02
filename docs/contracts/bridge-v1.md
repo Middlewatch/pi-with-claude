@@ -128,18 +128,26 @@ oldest unclaimed block whose name matches the call's registered name
 equality preferred when several unclaimed blocks share the name. Two
 concurrent calls with the same name *and* the same input are
 indistinguishable at this seam and interchangeable by construction, so
-the residual ambiguity is harmless. A rebuilder must not bind by bare
-arrival order: the CLI's dispatch concurrency is uncharacterized,
-and receivers dispatch requests on independent tasks.
+the residual ambiguity is harmless. A rebuilder binds by name, not by
+bare arrival order: the CLI dispatches hosted calls one at a time
+(`tools/call` k+1 only after result k, characterized at 2.1.258;
+`contracts/events.md`, timing facts) while the model's later blocks
+keep streaming, and receivers dispatch requests on independent tasks,
+so the order a call arrives in says nothing about which block it
+belongs to.
 
 ## Turn boundaries
 
 Each accepted `turn` frame that runs something is answered by exactly
 one `turn_end` (or `restarted`/`error`). A model turn that calls proxy
-tools pauses there: `turn_end` (`reason: "tool_calls"`) carries the
-assistant blocks streamed so far, and the still-in-flight model turn
-resumes when a later `turn` frame completes the calls — that resumed
-stretch is answered by its own `turn_end`. Where the CLI turn splits
+tools pauses at the first dispatched call: `turn_end`
+(`reason: "tool_calls"`) carries the assistant blocks streamed so far
+whose calls the CLI has dispatched. A `tool_use` block already streamed
+but not yet dispatched opens the next stretch's message instead, since
+the CLI dispatches it only after the earlier results (`contracts/events.md`,
+timing facts); a stretch that waited for it would deadlock. The
+still-in-flight model turn resumes when a later `turn` frame completes
+the calls, and that resumed stretch is answered by its own `turn_end`. Where the CLI turn splits
 across such pauses, each `turn_end.message` is one neutral assistant
 message, and the projection records them exactly as emitted.
 
