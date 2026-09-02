@@ -1,7 +1,6 @@
 {
   "name": "pi-with-claude",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "description": "Claude Code as a Pi model provider: an in-process Pi extension speaking the claude stream-json wire natively",
   "type": "module",
   "license": "MIT",
