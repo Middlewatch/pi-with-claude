@@ -427,14 +427,16 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
 
       const candidate = projectMessages(context.messages);
       let sendable: Message[] = [];
-      let freshStarted = false; // a fresh session was forced; only trailing user input can ride it
+      // A fresh session was forced, and why (the dead-end message below
+      // names it); only trailing user input can ride it.
+      let freshWhy: string | null = null;
 
       // takeFreshStart resets the session bookkeeping to what a
       // brand-new claude session can honestly receive, and records
       // everything else in the dropped ledger so it is never
       // re-flagged as new.
-      const takeFreshStart = () => {
-        freshStarted = true;
+      const takeFreshStart = (why: string) => {
+        freshWhy = why;
         const plan = freshStart(candidate);
         sendable = plan.sendable;
         s!.noted = [];
@@ -450,18 +452,18 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         // reopen clean — the honest degraded mode.
         debug("absorbed history rewritten by host: reopening session");
         s = swapSession();
-        takeFreshStart();
+        takeFreshStart("history the model had already seen was rewritten (branch navigation or compaction)");
       } else if (fresh.some((m) => m.role !== "user")) {
         // Fresh content no suffix can carry (assistant history): a
         // resumed Pi session on a new process, or a foreign assistant
         // message injected mid-session.
         if (s.noted.length === 0 && s.dropped.size === 0) {
           debug("resumed history on a fresh session: fresh start");
-          takeFreshStart();
+          takeFreshStart("this session resumed from stored history");
         } else {
           debug("foreign assistant history mid-session: reopening session");
           s = swapSession();
-          takeFreshStart();
+          takeFreshStart("assistant history this session never produced was inserted");
         }
       } else if (s.inFlight) {
         // While a model turn is paused on tool calls, only completions
@@ -477,7 +479,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
           // restart path answers it.
           debug("stale tool_result between turns: reopening session");
           s = swapSession();
-          takeFreshStart();
+          takeFreshStart("a tool result arrived for a call whose turn had already ended");
         }
       }
 
@@ -493,7 +495,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         if (missing.length > 0) {
           debug("unclaimable tool_result on the paused turn: reopening session");
           s = swapSession();
-          takeFreshStart();
+          takeFreshStart("a tool result arrived for a call this session never made");
         } else {
           for (const c of completions) {
             const entry = s.parkedById.get(c.call_id)!;
@@ -511,19 +513,17 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       if (sendable.length === 0 && !resumed) {
         // Recoverable dead ends, each with a different recovery — so
         // the turn says which one it was rather than the symptom.
-        if (freshStarted) {
-          // Name the actual cause — a swap the user asked for reads very
-          // differently from history moving underneath us, and blaming
-          // the wrong one sends them hunting.
+        if (freshWhy) {
+          // Name the actual cause: a swap the user asked for, history
+          // rewritten underneath us, and a stale tool result all end
+          // here, and blaming the wrong one sends them hunting.
           const where = accountDir ? accountDir.split("/").pop() : "the inherited account";
-          const cause = swapped
-            ? `switching to ${where} / ${model.id}`
-            : "history the model had already seen changed underneath this session, which";
+          const cause = swapped ? `switching to ${where} / ${model.id}` : freshWhy;
           throw new Error(
-            `pi-with-claude: ${cause} starts a fresh session, and a fresh session cannot answer a ` +
-              "tool call that was already in flight. Nothing was sent" +
+            `pi-with-claude: ${cause}, so the session restarted, and the only input left to send was ` +
+              "tool results, which a fresh session cannot deliver. Nothing was sent" +
               (swapped ? " and the switch is still pending" : "") +
-              " — send a message to start it.",
+              "; send a message to start it.",
           );
         }
         if (s.inFlight) {

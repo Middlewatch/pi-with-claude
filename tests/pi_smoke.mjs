@@ -107,18 +107,24 @@ if (phase === "--seeded") {
 
 if (phase === "--stale") {
   // A tool_result answering a call whose turn already ended is stale:
-  // the honest restart runs, the trailing user text still goes out.
+  // the honest restart runs. Alone it is a dead end the message must
+  // blame on the stale result (not on rewritten history); with user
+  // text behind it the text still goes out.
   const { id, config: cfg } = await loadProvider();
   const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
   const ctx = { systemPrompt: "You are a test.", messages: [{ role: "user", content: "one", timestamp: Date.now() }] };
   const m1 = await turnOf(cfg, model, ctx);
   if (m1.stopReason !== "stop") fail(`stale turn 1 stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
-  ctx.messages.push(
-    m1,
-    { role: "toolResult", toolCallId: "toolu_never_issued", toolName: "add",
-      content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now() },
-    { role: "user", content: "two", timestamp: Date.now() },
-  );
+  ctx.messages.push(m1, {
+    role: "toolResult", toolCallId: "toolu_never_issued", toolName: "add",
+    content: [{ type: "text", text: "5" }], isError: false, timestamp: Date.now(),
+  });
+  const refused = await turnOf(cfg, model, ctx);
+  if (refused.stopReason !== "error") fail(`stale-only turn stopReason ${refused.stopReason}, want error`);
+  if (!(refused.errorMessage ?? "").includes("a call whose turn had already ended")) {
+    fail(`stale-only refusal blames the wrong cause: ${refused.errorMessage}`);
+  }
+  ctx.messages.push({ role: "user", content: "two", timestamp: Date.now() });
   const m2 = await turnOf(cfg, model, ctx);
   if (m2.stopReason !== "stop") fail(`stale turn 2 stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
   console.log("pi_smoke stale: OK");
