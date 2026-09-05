@@ -73,6 +73,15 @@ with `parent_tool_use_id` at the top level. Tool use appears as a
 `tool_use` block in an assistant message, and the tool result comes back
 as a `tool_result` block in a `user` frame the CLI emits on its own.
 
+A `tool_use` whose name the CLI does not host (a model-invented name such
+as `mcp__nothing`) still appears as an assistant frame, but no
+`tools/call` follows: the CLI answers it itself with a `user` frame whose
+`tool_result` carries `<tool_use_error>Error: No such tool available:
+<name></tool_use_error>` and `is_error: true`, and the turn continues to
+its normal result (2.1.258, `unknown-tool-turn.jsonl`). Such a block has
+no host-side handler, so the extension drops it from what Pi is handed
+rather than surfacing a toolCall Pi would execute and fail.
+
 ### `stream_event` (only with `--include-partial-messages`)
 
 The `event` field carries a `BetaRawMessageStreamEvent`: `message_start`,
@@ -123,4 +132,5 @@ decode tests exercise them.
 | `result-usage.jsonl` | three verbatim result frames (per-turn and cumulative fields) | legs A and B |
 | `interrupt-turn.jsonl` | directional `{"dir":"lib"\|"cli","frame":…}`: user frame, our interrupt request, ack, interrupted result | leg A turn 3 |
 | `mcp-dialect-turn.jsonl` | directional: initialize request, MCP handshake / tools/list / tools/call / can_use_tool with our responses | leg B both directions |
+| `unknown-tool-turn.jsonl` | one turn where the model calls `mcp__nothing`: its `tool_use` assistant frame, the CLI's own `tool_use_error` user frame (no `tools/call`), then a second model message and `end_turn` result | 2.1.258 stdout, 2026-09-05 |
 | `unknown-event.jsonl` | synthesized unheard-of type (I4 falsification) | synthesized |

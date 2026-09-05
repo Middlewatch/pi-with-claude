@@ -559,17 +559,20 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       // authoritative message Pi stores and re-projects next turn.
       const finalizeTurn = (reason: string) => {
         blocks.close();
-        // At a tool-call pause the stretch carries the blocks whose calls
-        // are dispatched; tool_use blocks still awaiting their dispatch
-        // open the next stretch. Any other ending drops them: the model
-        // turn they belonged to is over.
-        let handed = turnBlocks;
-        if (reason === "tool_calls") {
-          const held = (b: Json) => b.type === "tool_use" && !s!.parkedById.has(b.id);
-          s!.carried = turnBlocks.filter(held);
-          handed = turnBlocks.filter((b: Json) => !held(b));
-        } else {
-          s!.carried = [];
+        // A tool_use block with no parked handler is a call the CLI has
+        // not dispatched to this host. At a tool-call pause such blocks
+        // open the next stretch (the CLI dispatches serially). On any
+        // other ending they are dropped, from Pi's copy too: the CLI
+        // answered them itself (a name nothing hosts draws the CLI's own
+        // tool_use_error, characterized 2026-09-05 against 2.1.258,
+        // fixtures/unknown-tool-turn.jsonl), and a toolCall handed to Pi
+        // is one Pi executes, fails, and answers with a stale tool_result
+        // that costs the whole session.
+        const unparked = (b: Json) => b.type === "tool_use" && !s!.parkedById.has(b.id);
+        const handed = turnBlocks.filter((b: Json) => !unparked(b));
+        s!.carried = reason === "tool_calls" ? turnBlocks.filter(unparked) : [];
+        if (reason !== "tool_calls" && handed.length < turnBlocks.length) {
+          debug("dropped", turnBlocks.length - handed.length, "tool_use block(s) the CLI answered itself");
         }
         if (reason === "interrupted" || handed.length === 0) {
           // An interrupted turn's trailing block never gets its

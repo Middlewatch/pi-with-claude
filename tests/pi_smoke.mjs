@@ -571,6 +571,35 @@ if (phase === "--account-tools") {
   process.exit(0);
 }
 
+if (phase === "--unknown-tool") {
+  // The model names a tool nothing hosts. The CLI answers it itself
+  // (a tool_use_error user frame), dispatches no tools/call, and the
+  // turn runs on to end_turn (claude 2.1.258, characterized 2026-09-05,
+  // fixtures/unknown-tool-turn.jsonl). That orphan tool_use must not
+  // reach Pi as a toolCall: Pi would execute it, fail it, and the
+  // resulting stale tool_result would cost the whole session.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "call mcp__nothing", timestamp: Date.now() }],
+  };
+  const m1 = await turnOf(cfg, model, ctx);
+  if (m1.stopReason !== "stop") fail(`unknown-tool turn stopReason ${m1.stopReason}: ${m1.errorMessage ?? ""}`);
+  const orphans = m1.content.filter((c) => c.type === "toolCall").map((c) => c.name);
+  if (orphans.length) fail(`tool_use the CLI already answered reached Pi as toolCall ${JSON.stringify(orphans)}`);
+  if (!m1.content.some((c) => c.type === "text" && c.text === "done")) {
+    fail(`final text missing from the handed message: ${JSON.stringify(m1.content).slice(0, 300)}`);
+  }
+  // The session survives: the next ordinary turn continues it.
+  ctx.messages.push(m1, { role: "user", content: "again", timestamp: Date.now() });
+  const m2 = await turnOf(cfg, model, ctx);
+  if (m2.stopReason !== "stop") fail(`unknown-tool follow-up stopReason ${m2.stopReason}: ${m2.errorMessage ?? ""}`);
+  console.log("pi_smoke unknown-tool: OK");
+  process.exit(0);
+}
+
 if (phase !== undefined) fail(`unknown phase ${phase}`);
 
 // ---------------------------------------------------------------------
@@ -733,6 +762,22 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
   console.log("pi_smoke tools: OK — inversion loop through real pi");
 }
 
+// --- Real pi, the model names a tool nothing hosts: the CLI answers
+// it itself and the turn ends normally. Pi must see the final text and
+// never run (and fail) an orphan toolCall — the 2026-09-05 session loss.
+{
+  const { r, trace } = piTurn("call mcp__nothing", {
+    extraArgs: ["-e", join(root, "tests", "tool_ext.ts"), "-t", "add"],
+    env: { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "unknown-tool-turn.jsonl") },
+  });
+  if (r.status !== 0) fail(`unknown-tool pi exited ${r.status}: ${r.stderr?.slice(0, 600)} ${r.stdout?.slice(0, 400)}`);
+  if (/not found/.test(r.stdout)) fail(`pi ran the orphan toolCall: ${r.stdout.slice(0, 400)}`);
+  if (!r.stdout.includes("done")) fail(`final text not in pi output: ${r.stdout.slice(0, 400)}`);
+  if (count(trace, /reopening session/g) !== 0) fail(`unknown-tool turn reopened the session:\n${trace.slice(-800)}`);
+  if (count(trace, /turn sent:/g) !== 1) fail("unknown-tool: want exactly one sent turn");
+  console.log("pi_smoke unknown-tool (real pi): OK");
+}
+
 // --- Stub-API children.
 {
   const { trace } = runStubPhase("--seeded");
@@ -765,6 +810,17 @@ for (const [flag, fixture, extra] of [
   const { trace } = runStubPhase(flag, { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", fixture), ...(extra ?? {}) });
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
     if (count(trace, pattern) !== 0) fail(`${flag} took a ${label} — the mirror mismatched across the tool loop`);
+  }
+}
+{
+  const { trace } = runStubPhase("--unknown-tool", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "unknown-tool-turn.jsonl") });
+  for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {
+    if (count(trace, pattern) !== 0) fail(`unknown-tool phase took a ${label} — the orphan tool_use cost the session`);
+  }
+  if (count(trace, /turn sent:/g) !== 2) fail(`unknown-tool phase sent ${count(trace, /turn sent:/g)} turn(s), want 2`);
+  // The fake replays the fixture per user frame: one orphan dropped per turn.
+  if (count(trace, /dropped 1 tool_use block\(s\) the CLI answered itself/g) !== 2) {
+    fail(`unknown-tool phase did not record the dropped orphan once per turn:\n${trace.slice(-600)}`);
   }
 }
 {
