@@ -1,10 +1,10 @@
 # Spawn arguments: frozen wire contract
 
-**Pinned to:** `claude` 2.1.258, re-characterized 2026-09-01 through the
+**Pinned to:** `claude` 2.1.267, re-characterized 2026-09-10 through the
 native bridge with zero drift: the argv below accepted verbatim and
-`permissionMode` echoed in init. The floating `--model fable` alias now
-resolves to `claude-fable-5-1` (2.1.252 resolved it to `claude-fable-5`).
-`--effort` was not re-exercised in either re-pin.
+`permissionMode` echoed in init. The floating `--model fable` alias
+resolves to `claude-fable-5-1`. `--effort` was not re-exercised in any
+re-pin.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
 driven by Agent SDK 0.3.226, from a direct read of the SDK's argv
@@ -12,7 +12,9 @@ construction and `CLAUDE_CODE_ENTRYPOINT` handling plus two paid
 captures. Re-pinned 2026-08-31 to 2.1.252 through the native bridge: the
 argv accepted verbatim, `--permission-mode bypassPermissions` running
 hosted tools without a callback, and the pinned stdin user frame
-accepted. Only a ratified re-pin moves this file.
+accepted. Re-pinned 2026-09-01 to 2.1.258: zero drift, `fable` began
+resolving to `claude-fable-5-1` (2.1.252 resolved it to
+`claude-fable-5`). Only a ratified re-pin moves this file.
 
 ## Base argument set (always, in this order)
 

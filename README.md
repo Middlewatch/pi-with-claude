@@ -110,5 +110,5 @@ usage.
 `scripts/verify.sh` is the definition of green: typecheck, unit tests, and a
 token-free smoke driving real Pi against a scripted fake `claude`. CI runs
 exactly it. The wire is characterized against a named CLI version
-(`docs/contracts/`, currently claude 2.1.258), and a re-pin is a deliberate,
+(`docs/contracts/`, currently claude 2.1.267), and a re-pin is a deliberate,
 dated commit.

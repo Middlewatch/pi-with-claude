@@ -769,7 +769,9 @@ export default function (pi: ExtensionAPI) {
     // a user message; .local/evidence/2026-08-31-s3/windows.txt) and
     // re-confirmed unchanged against 2.1.258 on 2026-09-01, where the
     // fable alias began resolving to claude-fable-5-1
-    // (.local/evidence/2026-09-01-repin-2.1.258/windows.txt). The
+    // (.local/evidence/2026-09-01-repin-2.1.258/windows.txt), and again
+    // against 2.1.267 on 2026-09-10
+    // (.local/evidence/2026-09-10-repin-2.1.267/windows.txt). The
     // CLI is what actually compacts, so its number is the one Pi's
     // gauge must agree with. Overstating is the dangerous direction:
     // too large a number means compaction never fires and a long

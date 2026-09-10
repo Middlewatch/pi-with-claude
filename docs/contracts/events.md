@@ -1,11 +1,12 @@
 # Event stream: frozen wire contract
 
-**Pinned to:** `claude` 2.1.258, re-characterized 2026-09-01 through the
+**Pinned to:** `claude` 2.1.267, re-characterized 2026-09-10 through the
 native bridge with zero drift from the earlier pins: identical
-`capabilities`, init shape, result subtypes, and cumulative-cost
-semantics. The `fable` alias resolves to `claude-fable-5-1` at 2.1.258
-(`claude-fable-5` at 2.1.252), and the context windows of all four
-aliases are unchanged.
+`capabilities`, init shape, stream_event families, result subtypes, and
+cumulative-cost semantics. Two additive fields, read by nothing:
+`result.first_content_frame_ms` and a null `container` on the assistant
+`message`. The `fable` alias still resolves to `claude-fable-5-1`, and
+the context windows of all four aliases are unchanged.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
 driven by Agent SDK 0.3.226 (two captures, leg A direct and leg B
@@ -13,7 +14,9 @@ through the SDK; committed excerpts in `fixtures/`). Re-pinned
 2026-08-31 to 2.1.252 through the native bridge: init re-emitted per user
 frame, identical `capabilities` set, `apiKeySource: "none"` under
 subscription auth, and an interrupted turn added nothing to
-`total_cost_usd`. Only a ratified re-pin moves this file.
+`total_cost_usd`. Re-pinned 2026-09-01 to 2.1.258: zero drift, the
+`fable` alias began resolving to `claude-fable-5-1` (`claude-fable-5` at
+2.1.252). Only a ratified re-pin moves this file.
 
 ## The tolerance rule (I4)
 
@@ -94,7 +97,13 @@ One per turn. The depended-on keys, per the SDK oracle and as observed:
 
 - `subtype`: `success` observed for completed turns, and
   `error_during_execution` observed for an interrupted turn
-  (`is_error: true`, `result: null`).
+  (`is_error: true`, `result: null`). An account the backend refuses
+  also ends as `success`, with `is_error: true`,
+  `terminal_reason: "api_error"`, zero cost, and an assistant frame of
+  model `<synthetic>` whose text is the refusal (characterized
+  2026-09-10 against 2.1.267 and 2.1.258 on an account whose
+  subscription had lapsed; the same delivery the 2026-08-31
+  third-party-billing 400 used).
 - `usage`: per-turn, main agent loop only (leg A turn 1: 879 input
   tokens on the initialize system-prompt path, the same order as the
   probe's 868).
