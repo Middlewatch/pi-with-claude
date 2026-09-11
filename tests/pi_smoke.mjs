@@ -68,9 +68,11 @@ async function loadProvider() {
   return captured;
 }
 
-async function turnOf(cfg, model, ctx, options) {
+async function turnOf(cfg, model, ctx, options, events = null) {
   const s = cfg.streamSimple(model, ctx, options);
-  for await (const _ of s) { /* drain */ }
+  for await (const ev of s) {
+    if (events) events.push(ev.type);
+  }
   return await s.result();
 }
 
@@ -144,10 +146,18 @@ async function toolLoop({ isError, wantThinking, wantBlocks }) {
     tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
     messages: [{ role: "user", content: "add 2 and 3", timestamp: Date.now() }],
   };
-  const pause = await turnOf(cfg, model, ctx);
+  const events = [];
+  const pause = await turnOf(cfg, model, ctx, undefined, events);
   if (pause.stopReason !== "toolUse") fail(`tool pause stopReason ${pause.stopReason}: ${pause.errorMessage ?? ""}`);
   const call = pause.content.find((c) => c.type === "toolCall");
   if (!call) fail("no toolCall block in the paused message");
+  // The first call streams its arguments live: one toolcall_start (no
+  // duplicate at the pause), at least one toolcall_delta, one toolcall_end.
+  const n = (t) => events.filter((e) => e === t).length;
+  if (n("toolcall_start") !== 1 || n("toolcall_end") !== 1 || n("toolcall_delta") < 1) {
+    fail(`tool call events start=${n("toolcall_start")} delta=${n("toolcall_delta")} end=${n("toolcall_end")}, want 1/>=1/1`);
+  }
+  if (JSON.stringify(call.arguments) !== JSON.stringify({ a: 2, b: 3 })) fail(`paused call arguments ${JSON.stringify(call.arguments)}`);
   if (call.name.startsWith("mcp__")) fail(`toolCall surfaced under wire name ${call.name} — Pi cannot execute it`);
   const think = pause.content.find((c) => c.type === "thinking");
   if (wantThinking !== undefined) {

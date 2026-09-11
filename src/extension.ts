@@ -312,6 +312,34 @@ function blockWriter(stream: ReturnType<typeof makeEventStream>, output: Json) {
   return { delta, close };
 }
 
+// The arguments of a tool call still streaming: the partial JSON with
+// its open strings and containers closed, or null while even that is
+// unparseable (a key cut mid-name), in which case the last good parse
+// stands. Display only; the authoritative input arrives in the
+// assistant frame.
+function parsePartialJson(partial: string): Json | null {
+  const closers: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (const ch of partial) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "{") closers.push("}");
+    else if (ch === "[") closers.push("]");
+    else if (ch === "}" || ch === "]") closers.pop();
+  }
+  const candidate = partial.replace(/,\s*$/, "") + (inString ? '"' : "") + closers.reverse().join("");
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------
 // streamSimple: one session turn per call.
 
@@ -546,6 +574,16 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
 
       const blocks = blockWriter(stream, output);
 
+      // S1 trial: the first tool call of a stretch streams its
+      // arguments live (toolcall_start at the block's start, a
+      // toolcall_delta per input_json_delta). Only the first: the CLI
+      // dispatches serially, so later blocks are carried into the next
+      // stretch and would appear, vanish, and reappear if streamed. A
+      // block the CLI answers itself still streams and is then dropped
+      // at finalize, as before.
+      let streaming: { wireIndex: number; contentIndex: number; partialJson: string } | null = null;
+      const startedIds = new Set<string>();
+
       // The turn's authoritative assistant blocks: the CLI emits one
       // assistant frame per completed content block (characterized,
       // fixtures/turn-deltas.jsonl); their concatenation is the message
@@ -602,7 +640,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         s!.noted.push(...sendable, { role: "assistant", blocks: assistantBlocks(output.content) });
         output.content.forEach((c: Json, i: number) => {
           if (c.type === "toolCall") {
-            stream.push({ type: "toolcall_start", contentIndex: i, partial: output });
+            if (!startedIds.has(c.id)) stream.push({ type: "toolcall_start", contentIndex: i, partial: output });
             stream.push({ type: "toolcall_end", contentIndex: i, toolCall: c, partial: output });
           }
         });
@@ -655,10 +693,27 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         debug("frame:", frame.type, frame.subtype ?? frame.event?.type ?? "");
         if (frame.type === "stream_event") {
           const ev = frame.event;
-          if (ev?.type === "content_block_delta") {
-            const index = typeof ev.index === "number" ? ev.index : null;
+          const index = typeof ev?.index === "number" ? ev.index : null;
+          if (ev?.type === "content_block_start" && ev.content_block?.type === "tool_use" && !streaming && toolUseBlocks().length === 0) {
+            blocks.close();
+            const cb = ev.content_block;
+            output.content.push({ type: "toolCall", id: cb.id, name: plainToolName(cb.name ?? ""), arguments: cb.input ?? {} });
+            streaming = { wireIndex: index ?? -1, contentIndex: output.content.length - 1, partialJson: "" };
+            startedIds.add(cb.id);
+            stream.push({ type: "toolcall_start", contentIndex: streaming.contentIndex, partial: output });
+          } else if (ev?.type === "content_block_delta") {
             if (ev.delta?.type === "text_delta") blocks.delta("text", index, ev.delta.text ?? "");
             else if (ev.delta?.type === "thinking_delta") blocks.delta("thinking", index, ev.delta.thinking ?? "");
+            else if (ev.delta?.type === "input_json_delta" && streaming && index === streaming.wireIndex) {
+              const piece = ev.delta.partial_json ?? "";
+              streaming.partialJson += piece;
+              const args = parsePartialJson(streaming.partialJson);
+              if (args) output.content[streaming.contentIndex].arguments = args;
+              stream.push({ type: "toolcall_delta", contentIndex: streaming.contentIndex, delta: piece, partial: output });
+            }
+          } else if (ev?.type === "content_block_stop" && streaming && index === streaming.wireIndex) {
+            // toolcall_end comes from finalizeTurn with the authoritative block.
+            streaming = null;
           }
         } else if (frame.type === "assistant") {
           turnBlocks.push(...(frame.message?.content ?? []));
