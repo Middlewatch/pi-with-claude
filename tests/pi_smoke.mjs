@@ -606,6 +606,21 @@ if (phase === "--unknown-tool") {
   process.exit(0);
 }
 
+if (phase === "--refused") {
+  // A backend refusal ends as `success` with is_error true and the
+  // refusal text as result (fixtures/refused-turn.jsonl, a lapsed
+  // subscription, 2026-09-10). Pi must see an error stop carrying that
+  // text, not a reply that happens to read like one.
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = { systemPrompt: "You are a test.", tools: [], messages: [{ role: "user", content: "hello", timestamp: Date.now() }] };
+  const m = await turnOf(cfg, model, ctx);
+  if (m.stopReason !== "error") fail(`refused turn stopReason ${m.stopReason}, want error`);
+  if (!/disabled Claude subscription access/.test(m.errorMessage ?? "")) fail(`refusal text not in errorMessage: ${m.errorMessage}`);
+  console.log("pi_smoke refused: OK");
+  process.exit(0);
+}
+
 if (phase !== undefined) fail(`unknown phase ${phase}`);
 
 // ---------------------------------------------------------------------
@@ -784,6 +799,19 @@ const count = (text, pattern) => (text.match(pattern) ?? []).length;
   console.log("pi_smoke unknown-tool (real pi): OK");
 }
 
+// --- Real pi, the backend refuses the account: the turn surfaces as an
+// error carrying the refusal text.
+{
+  const { r } = piTurn("hello", { env: { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "refused-turn.jsonl") } });
+  const out = `${r.stdout ?? ""}\n${r.stderr ?? ""}`;
+  // The `pi-with-claude:` prefix exists only on errorMessage: a reply
+  // that merely read like the refusal would print bare.
+  if (!/pi-with-claude: Your organization has disabled Claude subscription access/.test(out)) {
+    fail(`refusal not surfaced as an error (exit ${r.status}): ${out.slice(0, 600)}`);
+  }
+  console.log("pi_smoke refused (real pi): OK");
+}
+
 // --- Stub-API children.
 {
   const { trace } = runStubPhase("--seeded");
@@ -818,6 +846,7 @@ for (const [flag, fixture, extra] of [
     if (count(trace, pattern) !== 0) fail(`${flag} took a ${label} — the mirror mismatched across the tool loop`);
   }
 }
+runStubPhase("--refused", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "refused-turn.jsonl") });
 {
   const { trace } = runStubPhase("--unknown-tool", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "unknown-tool-turn.jsonl") });
   for (const [pattern, label] of [[/fresh start:/g, "fresh start"], [/reopening session/g, "reopen"]]) {

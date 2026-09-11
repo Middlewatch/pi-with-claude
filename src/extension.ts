@@ -672,8 +672,15 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
           // An interrupted turn comes back as error_during_execution,
           // not a distinct subtype (docs/contracts/events.md); it is Pi's
           // aborted stop only when this host actually interrupted.
+          // A backend refusal (a lapsed subscription, the third-party
+          // billing 400) ends as `success` with is_error true and the
+          // refusal text as `result`, behind a <synthetic> assistant
+          // frame carrying the same text (docs/contracts/events.md,
+          // fixtures/refused-turn.jsonl). That is an error stop, not a
+          // reply.
+          const refused = frame.subtype === "success" && frame.is_error === true;
           finalizeTurn(
-            frame.subtype === "success"
+            frame.subtype === "success" && !refused
               ? "end_turn"
               : frame.subtype === "error_during_execution" && options?.signal?.aborted
                 ? "interrupted"
@@ -709,7 +716,11 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
             output.usage.cost.total = Math.max(0, frame.total_cost_usd - s.lastCostUsd);
             s.lastCostUsd = frame.total_cost_usd;
           }
-          if (output.stopReason === "error") output.errorMessage = `pi-with-claude: turn ended ${frame.subtype}`;
+          if (output.stopReason === "error") {
+            output.errorMessage = refused && typeof frame.result === "string"
+              ? `pi-with-claude: ${frame.result}`
+              : `pi-with-claude: turn ended ${frame.subtype}`;
+          }
           break;
         } else if (frame.type === "__closed") {
           throw new Error(`pi-with-claude: session stream ended mid-turn${frame.error ? `: ${frame.error}` : ""}`);

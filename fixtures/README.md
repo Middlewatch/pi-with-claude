@@ -10,5 +10,8 @@ fresh capture from a real CLI, with the version noted here.
 - `unknown-tool-turn.jsonl`: characterized 2026-09-05 against `claude`
   2.1.258 (a `tool_use` naming a tool nothing hosts: the CLI answers it
   itself, dispatches no `tools/call`, and the turn runs on to `end_turn`).
+- `refused-turn.jsonl`: characterized 2026-09-10 against `claude` 2.1.267
+  (a backend refusal: `success` result with `is_error: true` and the
+  refusal text, behind a `<synthetic>` assistant frame).
 - `unknown-event.jsonl`: synthetic, the I4 tolerance drill (an unheard-of
   event type plus JSON scalar lines that are not frames).
