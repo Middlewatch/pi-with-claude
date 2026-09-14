@@ -1,12 +1,17 @@
 # Event stream: frozen wire contract
 
-**Pinned to:** `claude` 2.1.267, re-characterized 2026-09-10 through the
+**Pinned to:** `claude` 2.1.270, re-characterized 2026-09-13 through the
 native bridge with zero drift from the earlier pins: identical
 `capabilities`, init shape, stream_event families, result subtypes, and
 cumulative-cost semantics. Two additive fields, read by nothing:
-`result.first_content_frame_ms` and a null `container` on the assistant
-`message`. The `fable` alias still resolves to `claude-fable-5-1`, and
-the context windows of all four aliases are unchanged.
+`wire_tool_inputs` on assistant frames (a map of tool_use id to that
+call's complete input) and `result.result_index` (a 0-based per-session
+turn counter, interrupted turns included). The `fable` alias still
+resolves to `claude-fable-5-1`, and the context windows of all four
+aliases are unchanged. A sonnet probe (a prefix above sonnet's 1024-token
+cacheable minimum) showed `cache_read_input_tokens` covering the whole
+prior prefix on the next turn and again on the turn after a mid-thought
+interrupt, so prompt-cache reuse holds through this transport.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
 driven by Agent SDK 0.3.226 (two captures, leg A direct and leg B
@@ -16,7 +21,9 @@ frame, identical `capabilities` set, `apiKeySource: "none"` under
 subscription auth, and an interrupted turn added nothing to
 `total_cost_usd`. Re-pinned 2026-09-01 to 2.1.258: zero drift, the
 `fable` alias began resolving to `claude-fable-5-1` (`claude-fable-5` at
-2.1.252). Only a ratified re-pin moves this file.
+2.1.252). Re-pinned 2026-09-10 to 2.1.267: zero drift, additive
+`result.first_content_frame_ms` and a null `container` on the assistant
+`message`. Only a ratified re-pin moves this file.
 
 ## The tolerance rule (I4)
 

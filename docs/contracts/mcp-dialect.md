@@ -1,8 +1,8 @@
 # Hosted-tool MCP dialect: frozen wire contract
 
-**Pinned to:** `claude` 2.1.267, re-characterized 2026-09-10 through the
+**Pinned to:** `claude` 2.1.270, re-characterized 2026-09-13 through the
 native bridge with zero drift: the CLI still offers protocol version
-`2025-11-25` (clientInfo version 2.1.267), the same handshake, and the
+`2025-11-25` (clientInfo version 2.1.270), the same handshake, and the
 same `_meta` stamping (`claudecode/toolUseId` plus `progressToken`).
 
 **Pin history.** The observed wire rather than a spec reading: first
@@ -11,8 +11,9 @@ characterized 2026-08-09 against `claude` 2.1.226 driven by Agent SDK
 directions). Re-pinned 2026-08-31 to 2.1.252 through the native bridge:
 the CLI still offered `2025-11-25` (clientInfo version 2.1.252), accepted
 this extension's answers, and stamped `claudecode/toolUseId` into
-`tools/call` `_meta`. Re-pinned 2026-09-01 to 2.1.258 with zero drift
-(clientInfo version 2.1.258). Only a ratified re-pin moves this file.
+`tools/call` `_meta`. Re-pinned 2026-09-01 to 2.1.258, 2026-09-10 to
+2.1.267, and 2026-09-13 to 2.1.270, each with zero drift (clientInfo
+version tracking the CLI). Only a ratified re-pin moves this file.
 
 ## Protocol version
 
