@@ -18,6 +18,7 @@
 // (type-only), and no third-party dependency at all.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as piAi from "@earendil-works/pi-ai";
 import { appendFileSync } from "node:fs";
 import {
   assistantBlocks,
@@ -343,8 +344,31 @@ function parsePartialJson(partial: string): Json | null {
 // ---------------------------------------------------------------------
 // streamSimple: one session turn per call.
 
+/**
+ * The turn's prompt, tool declarations, and conversation. Pi after 0.85.1
+ * carries the prompt and tools in the transcript's `system` messages
+ * (pi PR 9548) and the provider replays them; earlier pi passes them as
+ * `context.systemPrompt` and `context.tools`. The claude session is a
+ * stateful transport that takes one prompt at open, so later system
+ * messages collapse into the head rather than going out in place.
+ */
+function turnInputs(context: Json): { systemPrompt: string; tools: Json[]; messages: Json[] } {
+  const raw: Json[] = context.messages ?? [];
+  const ai: Json = piAi;
+  if (!raw.some((m: Json) => m.role === "system") || typeof ai.collapseSystemMessages !== "function") {
+    return { systemPrompt: context.systemPrompt ?? "", tools: context.tools ?? [], messages: raw };
+  }
+  const transcript = ai.collapseSystemMessages(context);
+  return {
+    systemPrompt: ai.getCurrentSystemPrompt(transcript.messages),
+    tools: ai.getCurrentTools(transcript.messages),
+    messages: transcript.messages.filter((m: Json) => m.role !== "system"),
+  };
+}
+
 function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
-  debug("streamSimple called", model?.id, "messages:", context?.messages?.length, "tools:", context?.tools?.length);
+  const { systemPrompt, tools, messages } = turnInputs(context);
+  debug("streamSimple called", model?.id, "messages:", messages.length, "tools:", tools.length);
   const stream = makeEventStream();
 
   (async () => {
@@ -371,10 +395,9 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       // what this turn sends so observing extensions see the same
       // system prompt and messages. Observation only: a returned
       // replacement is not applied (I2, no rewriting on the way out).
-      const tools = context.tools ?? [];
       const toolsSig = JSON.stringify(projectTools(tools));
       await options?.onPayload?.(
-        { system: context.systemPrompt ?? "", messages: context.messages ?? [], model: model.id, tools: projectTools(tools) },
+        { system: systemPrompt, messages, model: model.id, tools: projectTools(tools) },
         model,
       );
 
@@ -389,7 +412,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         debug("opening session:", model.id, effort || "(default effort)", tools.length, "tool(s)");
         return new Session({
           model: model.id,
-          systemPrompt: context.systemPrompt ?? "",
+          systemPrompt,
           effort,
           tools,
           toolsSig,
@@ -453,7 +476,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
       };
       options?.signal?.addEventListener("abort", onAbort, { once: true });
 
-      const candidate = projectMessages(context.messages);
+      const candidate = projectMessages(messages);
       let sendable: Message[] = [];
       // A fresh session was forced, and why (the dead-end message below
       // names it); only trailing user input can ride it.
