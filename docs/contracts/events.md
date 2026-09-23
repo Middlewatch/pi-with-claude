@@ -10,7 +10,10 @@ nothing: two more `capabilities` (`mcp_read_resource_v1`,
 on the assistant `message`. The `opus` alias now resolves to
 `claude-opus-5-5` (`claude-opus-5` at 2.1.270); `fable` still resolves to
 `claude-fable-5-1`, and the context windows of all four aliases are
-unchanged.
+unchanged. An opus probe with a ~20k-token prefix showed
+`cache_read_input_tokens` covering the prior prefix on the next turn
+(19901 of 20306 written) and again after a mid-thought interrupt
+(20423), so prompt-cache reuse holds on Opus 5.5 through this transport.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
 driven by Agent SDK 0.3.226 (two captures, leg A direct and leg B
