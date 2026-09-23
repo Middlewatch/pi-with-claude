@@ -1,9 +1,9 @@
 # Control channel: frozen wire contract
 
-**Pinned to:** `claude` 2.1.270, re-characterized 2026-09-13 through the
+**Pinned to:** `claude` 2.1.281, re-characterized 2026-09-23 through the
 native bridge with zero drift: initialize, the interrupt receipt (2 ms),
 `mcp_message`, and `get_context_usage` are all byte-compatible with the
-2.1.252, 2.1.258, and 2.1.267 pins.
+2.1.252 through 2.1.270 pins.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
 driven by Agent SDK 0.3.226: leg A's initialize and interrupt exchanges,
@@ -17,8 +17,8 @@ and `get_context_usage` gained capture provenance (the answer carries
 `totalTokens`, `maxTokens`, `rawMaxTokens`, `percentage`, `categories`,
 `model`, so the typings-derived shape held on the real wire). Re-pinned
 2026-09-01 to 2.1.258 with zero drift (interrupt receipt 2 ms), 2026-09-10
-to 2.1.267 (3 ms), and 2026-09-13 to 2.1.270 (2 ms). Only a ratified
-re-pin moves this file.
+to 2.1.267 (3 ms), 2026-09-13 to 2.1.270 (2 ms), and 2026-09-23 to
+2.1.281 (2 ms). Only a ratified re-pin moves this file.
 
 ## Frames (ride the same stdio NDJSON as events)
 

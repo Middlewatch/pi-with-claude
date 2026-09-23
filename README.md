@@ -45,10 +45,14 @@ effect on the next turn.
 ## What the CLI adds on its own
 
 A few things reach the model from the CLI's side of the wire, where the
-extension cannot remove them (observed at claude 2.1.258):
+extension cannot remove them (observed at claude 2.1.258; the deferred-tools
+note at 2.1.281):
 
 - The line `You are a Claude agent, built on Anthropic's Claude Agent SDK.` is
   prepended to the system prompt, with no newline after it.
+- After the tool definitions, a note that some tools are deferred and may be
+  surfaced later (the CLI's tool-search boilerplate). Every hosted tool is
+  listed in full above it; none is deferred.
 - A `<system-reminder>` carrying your account email and today's date is
   injected into the first user message.
 - Behind feature flags, a nudge is appended to user turns and tool results
@@ -110,5 +114,5 @@ usage.
 `scripts/verify.sh` is the definition of green: typecheck, unit tests, and a
 token-free smoke driving real Pi against a scripted fake `claude`. CI runs
 exactly it. The wire is characterized against a named CLI version
-(`docs/contracts/`, currently claude 2.1.270), and a re-pin is a deliberate,
+(`docs/contracts/`, currently claude 2.1.281), and a re-pin is a deliberate,
 dated commit.
