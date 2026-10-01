@@ -41,6 +41,10 @@ effect on the next turn.
 - `PI_WITH_CLAUDE_CLAUDE`: path of the `claude` binary to spawn (the gate aims
   it at a scripted fake).
 - `PI_WITH_CLAUDE_DEBUG=<path>`: append one line per seam event.
+- `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`: the CLI's own cap on each tool
+  description, 2,048 characters by default. The extension sets it to 1000000
+  for the child so Pi's descriptions arrive whole; a value already in your
+  environment is passed through instead. Needs claude 2.1.280 or later.
 
 ## What the CLI adds on its own
 

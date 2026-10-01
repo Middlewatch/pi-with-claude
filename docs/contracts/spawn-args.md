@@ -72,7 +72,18 @@ ruled choice). The characterized diff between the unset run and the
 sdk-ts run: the `system/init` frames are structurally identical, with the
 same key set, the same `capabilities`, and the same `apiKeySource`,
 differing only in per-session values. The child environment is otherwise
-the parent's plus `CLAUDE_CONFIG_DIR` when an account is selected.
+the parent's plus `CLAUDE_CONFIG_DIR` when an account is selected and
+`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH=1000000` when the parent does not
+set that variable itself.
+
+The CLI cuts each MCP tool description (and server instructions) at
+2,048 characters and appends `… [truncated]`. Its 2.1.280 changelog adds
+the variable "to change the 2,048-character cap", and the 2.1.283 binary
+parses it as a digits-only integer with a minimum of 1 and no maximum.
+Added 2026-09-30 from that changelog, a read of the binary, and a paid
+Haiku probe at 2.1.283: with the variable at 1000000 the model saw text
+past character 2,048 of two long descriptions, and with it pinned to 2048
+it did not. Releases before 2.1.280 ignore the variable and keep the cut. `src/bridge.ts` `childEnv` is the implementation.
 
 ## Permission-mode semantics (characterized, load-bearing)
 

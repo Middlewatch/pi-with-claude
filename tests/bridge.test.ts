@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Bridge, buildArgs, makeMcpHandler, type ToolCallRequest } from "../src/bridge.ts";
+import { Bridge, buildArgs, childEnv, DESCRIPTION_CAP, DESCRIPTION_CAP_VAR, makeMcpHandler, type ToolCallRequest } from "../src/bridge.ts";
 
 // The bridge deliberately unrefs everything it owns (a session must
 // never hold Pi's event loop open between turns), so between tests the
@@ -93,6 +93,16 @@ test("buildArgs emits the pinned contract argv", () => {
     () => new Bridge({ model: "haiku", systemPrompt: "", effort: "turbo", tools: [], claudePath: "/bin/false" }),
     /unknown effort/,
   );
+});
+
+test("childEnv lifts the CLI's description cap unless the parent sets one", () => {
+  assert.deepEqual(childEnv({ HOME: "/h" }, { CLAUDE_CONFIG_DIR: "/a" }), {
+    [DESCRIPTION_CAP_VAR]: DESCRIPTION_CAP,
+    HOME: "/h",
+    CLAUDE_CONFIG_DIR: "/a",
+  });
+  assert.equal(childEnv({ [DESCRIPTION_CAP_VAR]: "4096" })[DESCRIPTION_CAP_VAR], "4096");
+  assert.match(DESCRIPTION_CAP, /^[1-9][0-9]*$/, "the CLI accepts digits only");
 });
 
 test("mcp handler speaks the pinned dialect", async () => {

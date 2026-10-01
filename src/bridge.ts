@@ -8,8 +8,8 @@
 //
 // No identity declaration of any kind is made (I2, honest absence):
 // CLAUDE_CODE_ENTRYPOINT is never set, and the child env is the parent's
-// plus only what the caller passes (account routing, I1: the variable,
-// never a credential).
+// plus the description-cap default (childEnv) and what the caller
+// passes (account routing, I1: the variable, never a credential).
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { MCP_SERVER } from "./projection.ts";
@@ -60,6 +60,23 @@ export function buildArgs(o: { model: string; effort: string }): string[] {
   if (o.effort) args.push("--effort", o.effort);
   args.push("--include-partial-messages");
   return args;
+}
+
+// The CLI cuts every MCP tool description at 2,048 characters unless
+// this variable raises the cap (claude 2.1.280 and later; earlier
+// releases ignore it). Pi owns the descriptions, so the default here is
+// far above any of them. The CLI accepts digits only, minimum 1.
+export const DESCRIPTION_CAP_VAR = "CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH";
+export const DESCRIPTION_CAP = "1000000";
+
+// The child environment per spawn-args.md: the parent's, with the
+// description cap defaulted (a value the parent already carries wins)
+// and the caller's variables on top.
+export function childEnv(
+  parent: Record<string, string | undefined>,
+  extra: Record<string, string> = {},
+): Record<string, string | undefined> {
+  return { [DESCRIPTION_CAP_VAR]: DESCRIPTION_CAP, ...parent, ...extra };
 }
 
 // What the SDK oracle answered the CLI's initialize offer at the pinned
@@ -181,7 +198,7 @@ export class Bridge {
     const path = opts.claudePath ?? process.env.PI_WITH_CLAUDE_CLAUDE ?? "claude";
     this.child = spawn(path, buildArgs(opts), {
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, ...(opts.env ?? {}) },
+      env: childEnv(process.env, opts.env),
     });
     // The child never holds the host's event loop open between turns
     // (Pi's -p mode ends when the loop drains; stdin EOF is the CLI's
