@@ -861,7 +861,10 @@ export default function (pi: ExtensionAPI) {
     // (.local/evidence/2026-09-01-repin-2.1.258/windows.txt), and again
     // against 2.1.267 on 2026-09-10, 2.1.270 on 2026-09-13, and 2.1.281
     // on 2026-09-23, where the opus alias began resolving to
-    // claude-opus-5-5 (.local/evidence/2026-09-23-repin-2.1.281/windows.txt). The
+    // claude-opus-5-5 (.local/evidence/2026-09-23-repin-2.1.281/windows.txt),
+    // and against 2.1.292 on 2026-10-06, where the sonnet alias began
+    // resolving to claude-sonnet-5-5
+    // (.local/evidence/2026-10-06-repin-2.1.292/windows.txt). The
     // CLI is what actually compacts, so its number is the one Pi's
     // gauge must agree with. Overstating is the dangerous direction:
     // too large a number means compaction never fires and a long

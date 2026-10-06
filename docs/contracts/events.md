@@ -1,19 +1,23 @@
 # Event stream: frozen wire contract
 
-**Pinned to:** `claude` 2.1.281, re-characterized 2026-09-23 through the
+**Pinned to:** `claude` 2.1.292, re-characterized 2026-10-06 through the
 native bridge with zero drift from the earlier pins: identical init
 shape, stream_event families, result subtypes, MCP `_meta` stamping,
 interrupt receipt, and cumulative-cost semantics. Additive, read by
-nothing: two more `capabilities` (`mcp_read_resource_v1`,
-`mcp_tool_ui_meta_v1`), init fields `per_turn_effort_active` (false) and
-`view_mode` (`"default"`), and `input_transformations` (an empty array)
-on the assistant `message`. The `opus` alias now resolves to
-`claude-opus-5-5` (`claude-opus-5` at 2.1.270); `fable` still resolves to
-`claude-fable-5-1`, and the context windows of all four aliases are
-unchanged. An opus probe with a ~20k-token prefix showed
-`cache_read_input_tokens` covering the prior prefix on the next turn
-(19901 of 20306 written) and again after a mid-thought interrupt
-(20423), so prompt-cache reuse holds on Opus 5.5 through this transport.
+nothing: four more `capabilities` (`interrupt_send_now_v1`,
+`sdk_mcp_tools_list_changed`, `sdk_mcp_manifests`, `ui_surface_v1`),
+`thinking_duration_ms` beside the assistant `message`,
+`result.safety_stops`, `result.usage.fallback_credit` (null), and
+`thinking_display` on `stream_event` frames. The `sonnet` alias now
+resolves to `claude-sonnet-5-5` (`claude-sonnet-5` at 2.1.281); `opus`
+still resolves to `claude-opus-5-5` and `fable` to `claude-fable-5-1`,
+and the context windows of all four aliases are unchanged. A 40-tool
+session listed every hosted tool in init (I6), so the CLI's tool-search
+deferral does not reach `sdk` servers. An opus probe at 2.1.281 with a
+~20k-token prefix showed `cache_read_input_tokens` covering the prior
+prefix on the next turn (19901 of 20306 written) and again after a
+mid-thought interrupt (20423), so prompt-cache reuse holds on Opus 5.5
+through this transport.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
 driven by Agent SDK 0.3.226 (two captures, leg A direct and leg B
@@ -32,7 +36,14 @@ turn counter, interrupted turns included); a sonnet probe (a prefix above
 sonnet's 1024-token cacheable minimum) showed `cache_read_input_tokens`
 covering the whole prior prefix on the next turn and again on the turn
 after a mid-thought interrupt, so prompt-cache reuse holds through this
-transport. Only a ratified re-pin moves this file.
+transport. Re-pinned 2026-09-23 to 2.1.281: zero drift, additive
+capabilities `mcp_read_resource_v1` and `mcp_tool_ui_meta_v1`, init
+fields `per_turn_effort_active` and `view_mode`, and
+`input_transformations` on the assistant `message`; `opus` began
+resolving to `claude-opus-5-5`. Re-pinned 2026-10-06 to 2.1.292: zero
+drift, four additive capabilities and four additive keys (header above);
+`sonnet` began resolving to `claude-sonnet-5-5`. Only a ratified re-pin
+moves this file.
 
 ## The tolerance rule (I4)
 
@@ -86,6 +97,13 @@ and `permissionMode`. The full captured key set is in
 registers no resources, so a `resources/read` gets the same JSON-RPC
 `-32601` as any other method it does not serve, and a tool declares no UI
 meta, so neither capability changes the wire this extension speaks.
+2.1.292 adds `interrupt_send_now_v1` (a `send_now` control request the
+bridge never sends; a plain interrupt is still a plain interrupt),
+`sdk_mcp_tools_list_changed` (the CLI now honours a
+`notifications/tools/list_changed` from an `sdk` server; the bridge
+declares `listChanged` but never sends one), `sdk_mcp_manifests` (an
+optional initialize field the binary says a stream-json host may omit),
+and `ui_surface_v1`. None changes the wire this extension speaks.
 
 The interrupt-receipt capability name is `interrupt_receipt_v1`, and the
 receipt payload observed is `{"still_queued": []}`.

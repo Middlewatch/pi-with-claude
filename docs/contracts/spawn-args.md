@@ -1,9 +1,10 @@
 # Spawn arguments: frozen wire contract
 
-**Pinned to:** `claude` 2.1.281, re-characterized 2026-09-23 through the
+**Pinned to:** `claude` 2.1.292, re-characterized 2026-10-06 through the
 native bridge with zero drift: the argv below accepted verbatim and
-`permissionMode` echoed in init. The floating `--model opus` alias
-resolves to `claude-opus-5-5` and `--model fable` to `claude-fable-5-1`.
+`permissionMode` echoed in init. The floating `--model sonnet` alias
+resolves to `claude-sonnet-5-5`, `--model opus` to `claude-opus-5-5`,
+and `--model fable` to `claude-fable-5-1`.
 `--effort` was not re-exercised in any re-pin.
 
 **Pin history.** First characterized 2026-08-09 against `claude` 2.1.226
@@ -17,7 +18,9 @@ resolving to `claude-fable-5-1` (2.1.252 resolved it to
 `claude-fable-5`). Re-pinned 2026-09-10 to 2.1.267 and 2026-09-13 to
 2.1.270, both zero drift. Re-pinned 2026-09-23 to 2.1.281: zero drift,
 `opus` began resolving to `claude-opus-5-5` (2.1.270 resolved it to
-`claude-opus-5`). Only a ratified re-pin moves this file.
+`claude-opus-5`). Re-pinned 2026-10-06 to 2.1.292: zero drift, `sonnet`
+began resolving to `claude-sonnet-5-5` (2.1.281 resolved it to
+`claude-sonnet-5`). Only a ratified re-pin moves this file.
 
 ## Base argument set (always, in this order)
 
