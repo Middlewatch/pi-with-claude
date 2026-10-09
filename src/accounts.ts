@@ -37,20 +37,24 @@ const stateFile = join(stateDir, "account");
 // installation never probes the real one.
 const claudeBin = () => process.env.PI_WITH_CLAUDE_CLAUDE || "claude";
 
-// A config directory by convention: ~/.claude, or ~/.claude-<name>.
-// ~/.claude.json is a file and excluded by the stat.
+// A config directory by convention: the inherited CLAUDE_CONFIG_DIR first
+// (a relocated default, such as ~/agent-kit/claude), then ~/.claude and
+// ~/.claude-<name>. ~/.claude.json is a file and excluded by the stat.
 function candidateDirs(): string[] {
   const home = homedir();
   let entries: string[];
   try {
     entries = readdirSync(home);
   } catch {
-    return [];
+    entries = [];
   }
-  return entries
+  const byConvention = entries
     .filter((n) => n === ".claude" || n.startsWith(".claude-"))
     .sort()
-    .map((n) => join(home, n))
+    .map((n) => join(home, n));
+  const inherited = process.env.CLAUDE_CONFIG_DIR;
+  const dirs = inherited ? [inherited, ...byConvention.filter((p) => p !== inherited)] : byConvention;
+  return dirs
     .filter((p) => {
       try {
         return statSync(p).isDirectory();
