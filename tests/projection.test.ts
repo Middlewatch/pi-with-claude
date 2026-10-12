@@ -22,6 +22,14 @@ const toolRes = (id: string, text: string, isError = false): Message => ({
   blocks: [{ type: "tool_result", call_id: id, content: [{ type: "text", text }], is_error: isError }],
 });
 const thinking = (text: string): Message => ({ role: "assistant", blocks: [{ type: "thinking", text }] });
+// A turn Pi recorded as error or aborted: pi-ai's setup error after an
+// Esc during a tool is the empty form; a reply cut off mid-stream keeps
+// its partial text.
+const failed = (text?: string): Message => ({
+  role: "assistant",
+  blocks: text === undefined ? [] : [{ type: "text", text }],
+  failed: true,
+});
 const noDrops = new Map<string, number>();
 
 test("absorbed history echoed back is not fresh", () => {
@@ -81,6 +89,50 @@ test("dropped history is subtracted and its absence raises nothing", () => {
   const gone = diffNew([user("next")], [], dropped);
   assert.equal(gone.deleted, false);
   assert.deepEqual(gone.fresh, [user("next")]);
+});
+
+test("a failed reply the mirror never noted is neither fresh nor a deletion (2a)", () => {
+  // Esc during a bash tool: Pi stores the aborted result, then pi-ai's
+  // setup error as an empty error-stop reply, then the next prompt.
+  const noted = [user("q"), { role: "assistant", blocks: [{ type: "tool_call", id: "t1", name: "mcp__pi__bash", input: {} }] } as Message];
+  const candidate = [...noted, toolRes("t1", "Command aborted", true), failed(), user("next")];
+  const { fresh, deleted } = diffNew(candidate, noted, noDrops);
+  assert.equal(deleted, false);
+  assert.deepEqual(fresh, [toolRes("t1", "Command aborted", true), user("next")]);
+});
+
+test("a failed reply the mirror did note still matches by identity", () => {
+  // A refused turn (fixtures/refused-turn.jsonl) is finalized and noted
+  // before it surfaces as an error stop; Pi hands it back flagged.
+  const noted = [user("q"), asst("refusal text")];
+  const { fresh, deleted } = diffNew([user("q"), failed("refusal text"), user("next")], noted, noDrops);
+  assert.equal(deleted, false);
+  assert.deepEqual(fresh, [user("next")]);
+  assert.equal(keyOf(failed("x")), keyOf(asst("x")));
+});
+
+test("projection flags error and aborted stops as failed, nothing else", () => {
+  const base = { role: "assistant", content: [{ type: "text", text: "a" }], timestamp: 1 };
+  assert.equal(projectMessages([{ ...base, stopReason: "error" }])[0].failed, true);
+  assert.equal(projectMessages([{ ...base, stopReason: "aborted" }])[0].failed, true);
+  assert.equal(projectMessages([{ ...base, stopReason: "stop" }])[0].failed, undefined);
+  assert.equal(projectMessages([{ ...base, stopReason: "toolUse" }])[0].failed, undefined);
+});
+
+test("freshStart carries the user run across a failed reply and drops the reply", () => {
+  // Two prompts around a reply cut off mid-stream: both are unanswered.
+  const candidate = [user("q"), asst("a"), user("x"), failed("partial"), user("y")];
+  const plan = freshStart(candidate);
+  assert.deepEqual(plan.sendable, [user("x"), user("y")]);
+  assert.deepEqual(diffNew(candidate, plan.sendable, plan.dropped), { fresh: [], deleted: false });
+  // Esc during a tool, then pi-ai's empty error reply, then a prompt:
+  // the aborted result and the failed reply are cut, the prompt goes.
+  const call: Message = { role: "assistant", blocks: [{ type: "tool_call", id: "t1", name: "mcp__pi__bash", input: {} }] };
+  const aborted = freshStart([user("q"), call, toolRes("t1", "Command aborted", true), failed(), user("y")]);
+  assert.deepEqual(aborted.sendable, [user("y")]);
+  assert.equal(aborted.dropped.size, 4);
+  // A failed reply at the very end leaves nothing to send.
+  assert.deepEqual(freshStart([user("q"), asst("a"), failed()]).sendable, []);
 });
 
 test("freshStart takes the trailing user run minus leading tool_results; the rest is dropped", () => {

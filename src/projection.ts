@@ -15,7 +15,14 @@ export type Block =
   | { type: "thinking"; text: string }
   | { type: "tool_call"; id: string; name: string; input: unknown }
   | { type: "tool_result"; call_id: string; content: unknown[]; is_error: boolean };
-export type Message = { role: "user" | "assistant"; blocks: Block[] };
+// `failed` marks an assistant message whose turn did not complete (Pi's
+// stopReason "error" or "aborted"). The live session holds whatever the
+// model actually lived of such a turn, or nothing at all when the
+// failure happened before the provider ran (pi-ai's own setup error
+// after an Esc during a tool: an empty message the mirror never saw).
+// The flag is not part of the identity key (bridge-v1.md §prefix-match
+// 2a).
+export type Message = { role: "user" | "assistant"; blocks: Block[]; failed?: true };
 
 // The in-process MCP server every Pi tool is hosted under. Pi executes
 // tools by its own registry names, so Pi-facing content carries the
@@ -61,7 +68,8 @@ export function projectMessages(messages: Json[]): Message[] {
               );
       out.push({ role: "user", blocks });
     } else if (m.role === "assistant") {
-      out.push({ role: "assistant", blocks: assistantBlocks(m.content) });
+      const failed = m.stopReason === "error" || m.stopReason === "aborted";
+      out.push({ role: "assistant", blocks: assistantBlocks(m.content), ...(failed ? { failed: true } : {}) });
     } else if (m.role === "toolResult") {
       out.push({
         role: "user",
@@ -109,6 +117,9 @@ export const keyOf = (msg: Message) =>
 // candidate — a Pi-side deletion of absorbed history (branch
 // navigation, compaction) that a live session must not paper over.
 // Dropped history going missing raises nothing: the model never saw it.
+// A failed assistant message the mirror never noted is skipped rather
+// than flagged fresh: nothing of it reached the model that the live
+// session does not already hold, so it is no reason to restart.
 // Membership, not index order, is the as-built relaxation of bridge-v1
 // §prefix-match: Pi does not reorder, and a reordered history would
 // surface as "nothing new to run", never as a replay.
@@ -130,6 +141,8 @@ export function diffNew(
       notedCounts.set(k, notedCounts.get(k)! - 1);
     } else if ((droppedCounts.get(k) ?? 0) > 0) {
       droppedCounts.set(k, droppedCounts.get(k)! - 1);
+    } else if (m.failed) {
+      continue;
     } else {
       fresh.push(m);
     }
@@ -143,18 +156,25 @@ export function diffNew(
 // honestly receive: the trailing run of user messages (the newest
 // input), minus any leading tool_results (their calls cannot exist in
 // a fresh session, and an unclaimable tool_result would fail the turn).
-// Everything cut away is returned as the dropped ledger, so the next
-// diff never re-flags it as new.
+// A failed assistant message inside that run does not end it (an Esc'd
+// reply between two prompts leaves both prompts unanswered) and is
+// itself cut, never sent. Everything cut away is returned as the
+// dropped ledger, so the next diff never re-flags it as new.
 export function freshStart(candidate: Message[]): { sendable: Message[]; dropped: Map<string, number> } {
   let cut = candidate.length;
-  while (cut > 0 && candidate[cut - 1].role === "user") cut--;
-  while (cut < candidate.length && candidate[cut].blocks.every((b) => b.type === "tool_result")) cut++;
+  while (cut > 0 && (candidate[cut - 1].role === "user" || candidate[cut - 1].failed)) cut--;
+  while (cut < candidate.length && (candidate[cut].failed || candidate[cut].blocks.every((b) => b.type === "tool_result"))) cut++;
   const dropped = new Map<string, number>();
-  for (const m of candidate.slice(0, cut)) {
+  const sendable: Message[] = [];
+  for (const [i, m] of candidate.entries()) {
+    if (i >= cut && !m.failed) {
+      sendable.push(m);
+      continue;
+    }
     const k = keyOf(m);
     dropped.set(k, (dropped.get(k) ?? 0) + 1);
   }
-  return { sendable: candidate.slice(cut), dropped };
+  return { sendable, dropped };
 }
 
 export const isUserContent = (m: Message) => m.blocks.some((b) => b.type === "text" || b.type === "image");

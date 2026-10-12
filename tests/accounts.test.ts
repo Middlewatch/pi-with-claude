@@ -21,6 +21,9 @@ test("discovery probes every ~/.claude* dir concurrently and keeps the signed-in
   process.env.PI_WITH_CLAUDE_CLAUDE = join(HERE, "fake_claude.py");
   process.env.FAKE_CLAUDE_AUTH_DELAY_MS = "400";
   delete process.env.PI_WITH_CLAUDE_ACCOUNTS;
+  // An inherited CLAUDE_CONFIG_DIR leads discovery (accounts.ts), and a
+  // shell under Claude Code exports one; the sandbox must not see it.
+  delete process.env.CLAUDE_CONFIG_DIR;
 
   const { accounts } = await import("../src/accounts.ts");
   const started = Date.now();

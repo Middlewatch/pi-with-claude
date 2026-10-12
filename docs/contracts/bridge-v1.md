@@ -69,6 +69,16 @@ whether any noted message went missing. Then:
    On a session that has noted nothing (a resumed Pi session on a new
    process) it takes a fresh start in place; mid-session it reopens the
    session first.
+   2a. The exception is a **failed** assistant message: one Pi recorded
+   with stop reason `error` or `aborted`. The projection flags it
+   (`failed`, outside the identity key). Noted, it matches as any other
+   message; unnoted, the diff skips it rather than flagging it fresh,
+   because nothing of it reached the model that the live session does
+   not already hold. The case this answers: an Esc during a Pi tool
+   makes Pi call the provider again with a spent signal, pi-ai's auth
+   step throws before the provider runs, and Pi stores an empty
+   error-stop reply the mirror never saw. A fresh start treats a failed
+   message inside the trailing user run as part of the run and cuts it.
 3. While a model turn is paused on tool calls, only completions go down.
    User text or images in the suffix are withheld and, being absent from
    the mirror, resurface as fresh suffix on the next call. Each

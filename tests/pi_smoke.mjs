@@ -332,6 +332,41 @@ if (phase === "--steering") {
   process.exit(0);
 }
 
+if (phase === "--abort-during-tool") {
+  // Esc while a Pi tool runs: Pi stores the aborted tool result, then
+  // pi-ai's setup error (the loop re-enters the provider with a spent
+  // signal and auth throws first) as an empty error-stop reply the
+  // mirror never saw, then the next prompt. The turn must resume the
+  // parked call on the live session, never reopen (bridge-v1 2a).
+  const { id, config: cfg } = await loadProvider();
+  const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
+  const ctx = {
+    systemPrompt: "You are a test.",
+    tools: [{ name: "add", description: "adds numbers", parameters: { type: "object" } }],
+    messages: [{ role: "user", content: "add 2 and 3", timestamp: Date.now() }],
+  };
+  const pause = await turnOf(cfg, model, ctx);
+  if (pause.stopReason !== "toolUse") fail(`abort-during-tool pause stopReason ${pause.stopReason}: ${pause.errorMessage ?? ""}`);
+  const call = pause.content.find((c) => c.type === "toolCall");
+  ctx.messages.push(
+    pause,
+    {
+      role: "toolResult", toolCallId: call.id, toolName: call.name,
+      content: [{ type: "text", text: "Command aborted" }], isError: true, timestamp: Date.now(),
+    },
+    {
+      role: "assistant", content: [], api: "pi-with-claude", provider: id, model: model.id,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+      stopReason: "error", errorMessage: "This operation was aborted", timestamp: Date.now(),
+    },
+    { role: "user", content: "never mind, carry on", timestamp: Date.now() },
+  );
+  const resumed = await turnOf(cfg, model, ctx);
+  if (resumed.stopReason !== "stop") fail(`abort-during-tool resumed turn stopReason ${resumed.stopReason}: ${resumed.errorMessage ?? ""}`);
+  console.log("pi_smoke abort-during-tool: OK");
+  process.exit(0);
+}
+
 if (phase === "--init-surface") {
   // I6 negative drill: a claude advertising a tool nobody requested
   // (fake_claude --advertise-extra-tool, via a wrapper since the
@@ -887,6 +922,14 @@ runStubPhase("--refused", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "refused
   if (count(trace, /turn sent:/g) !== 2) fail("steering phase: want exactly 2 sent turns (opening + delivery)");
   if (count(trace, /turn resumed:/g) !== 1) fail("steering phase: want exactly 1 resumed turn");
   if (count(trace, /reopening session/g) !== 0) fail("steering phase reopened — withheld steering must not restart");
+}
+{
+  const { trace } = runStubPhase("--abort-during-tool");
+  if (count(trace, /resumed 1 tool call\(s\)/g) !== 1) fail("abort-during-tool phase did not resume the parked call");
+  if (count(trace, /withheld 1 steering message\(s\)/g) !== 1) fail("abort-during-tool phase did not withhold the prompt from the resumed flight");
+  if (count(trace, /reopening session/g) !== 0 || count(trace, /fresh start:/g) !== 0) {
+    fail(`abort-during-tool phase restarted — Pi's error-stop reply read as foreign history:\n${trace.slice(-600)}`);
+  }
 }
 {
   const { trace, wire } = runStubPhase("--swap");
