@@ -163,6 +163,11 @@ class ControlIO:
     def __init__(self, log_path):
         self.log_path = log_path
         self.seq = 0
+        # User frames that arrived while a tools/call exchange was pending:
+        # the real CLI queues such a message and attaches it to the request
+        # that carries the tool result (contracts/events.md §Queued user
+        # frames), so the fake swallows it rather than replaying a segment.
+        self.queued = []
 
     def read_frame(self):
         line = sys.stdin.readline()
@@ -188,6 +193,9 @@ class ControlIO:
             frame = self.read_frame()
             if frame is None:
                 die(f"stream ended awaiting control_response for {request_id}")
+            if frame.get("type") == "user":
+                self.queued.append(frame)
+                continue
             if frame.get("type") != "control_response":
                 die(f"expected control_response for {request_id}, got {json.dumps(frame)[:150]}")
             resp = frame.get("response", {})

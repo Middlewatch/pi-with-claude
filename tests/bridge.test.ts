@@ -74,6 +74,16 @@ const wireLines = (log: string): Json[] =>
     .filter(Boolean)
     .map((l) => JSON.parse(l));
 
+test("slashLed marks text the CLI would run as a slash command", async () => {
+  const { slashLed } = await import("../src/bridge.ts");
+  assert.equal(slashLed([{ type: "text", text: "/help me" }]), true);
+  assert.equal(slashLed([{ type: "text", text: "  /compact now" }]), true);
+  assert.equal(slashLed([{ type: "image", source: {} }, { type: "text", text: "/x" }]), true);
+  assert.equal(slashLed([{ type: "text", text: "see /tmp/x" }]), false);
+  assert.equal(slashLed([{ type: "text", text: "hello" }]), false);
+  assert.equal(slashLed([]), false);
+});
+
 test("buildArgs emits the pinned contract argv", () => {
   assert.deepEqual(buildArgs({ model: "haiku", effort: "" }), [
     "--output-format", "stream-json", "--verbose", "--input-format", "stream-json",

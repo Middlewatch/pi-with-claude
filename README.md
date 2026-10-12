@@ -24,7 +24,10 @@ a fresh model context. `/new`, `/resume`, `/fork`, and quitting close the
 child; `/reload` keeps it, since the Pi session and its history survive the
 reload, and the next turn continues where it was. A reply Pi records as
 failed (an error, or an Esc that landed while a tool ran) is skipped by the
-history diff rather than taken as a reason to restart.
+history diff rather than taken as a reason to restart. A message typed while
+tools run (Pi's steering) goes down with the tool results and reaches the
+model on its next request; one that starts with `/` is marked so the CLI hands
+it to the model instead of running it as a slash command.
 
 ### Accounts
 

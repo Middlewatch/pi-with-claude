@@ -146,6 +146,17 @@ export function makeMcpHandler(tools: BridgeTool[], onCall: (req: ToolCallReques
   };
 }
 
+// Whether the CLI would read a user frame as one of its own slash
+// commands: any text block that starts with "/" after leading
+// whitespace. Characterized 2026-10-12 against 2.1.292: "/help ..." was
+// answered by the CLI itself ("/help isn't available in this
+// environment") and never reached the model; with `client_composed:
+// true` the model answered. A path such as "/tmp/x" reached the model
+// either way, so the mark is harmless where it is not needed.
+export function slashLed(content: Json[]): boolean {
+  return content.some((b) => b?.type === "text" && typeof b.text === "string" && b.text.trimStart().startsWith("/"));
+}
+
 // The oracle's graduated teardown timings (sdk.mjs v0.3.226): end
 // stdin, wait for a clean exit, SIGTERM, wait, SIGKILL.
 const CLOSE_STDIN_GRACE_MS = 2000;
@@ -390,7 +401,11 @@ export class Bridge {
   // exchange completes before any user input). Chaining on one settled
   // promise keeps multiple turns in send order; a failed write on a
   // live child is fatal — a session that cannot be written to must end
-  // as __closed, never hang a turn.
+  // as __closed, never hang a turn. Sent while a tools/call is parked,
+  // the frame is a queued message the CLI attaches to the request that
+  // carries the tool result (events.md §Queued user frames). Text that
+  // starts with "/" is marked client_composed so the CLI hands it to the
+  // model instead of running it as one of its own slash commands.
   pushUser(content: Json[]) {
     this.initialized.then(
       () => {
@@ -399,6 +414,7 @@ export class Bridge {
           session_id: "",
           message: { role: "user", content },
           parent_tool_use_id: null,
+          ...(slashLed(content) ? { client_composed: true } : {}),
         });
         if (!ok && !this.closed) this.fatal("writing user frame failed");
       },

@@ -79,11 +79,16 @@ whether any noted message went missing. Then:
    step throws before the provider runs, and Pi stores an empty
    error-stop reply the mirror never saw. A fresh start treats a failed
    message inside the trailing user run as part of the run and cuts it.
-3. While a model turn is paused on tool calls, only completions go down.
-   User text or images in the suffix are withheld and, being absent from
-   the mirror, resurface as fresh suffix on the next call. Each
-   completion must answer a parked call by `call_id`; an unknown or
-   already-completed id reopens the session with nothing applied.
+3. While a model turn is paused on tool calls, completions go down and
+   user text or images beside them ride along as a queued message,
+   written before the results they accompany; the CLI attaches it to
+   the request that carries those results (`contracts/events.md`
+   §Queued user frames), and the mirror notes it as sent. User content
+   with no completion beside it has nothing to resume on, is held, and,
+   being absent from the mirror, resurfaces as fresh suffix on the next
+   call. Each completion must answer a parked call by `call_id`; an
+   unknown or already-completed id reopens the session with nothing
+   applied.
 4. Between turns, the suffix carries user content: `text` and `image`
    blocks forwarded as one user turn in suffix order, adjacent text
    blocks newline-merged into one, and an empty merged run dropped (the

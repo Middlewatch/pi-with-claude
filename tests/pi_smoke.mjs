@@ -299,8 +299,8 @@ if (phase === "--interrupt") {
 
 if (phase === "--steering") {
   // Steering typed while tools run: alone it is refused with the
-  // holding message; alongside completions it is withheld from the
-  // resumed flight and delivered on the next ordinary turn.
+  // holding message; alongside completions it rides down into the
+  // paused turn as a queued message and is consumed there.
   const { id, config: cfg } = await loadProvider();
   const model = { id: cfg.models[0].id, api: "pi-with-claude", provider: id };
   const ctx = {
@@ -327,11 +327,11 @@ if (phase === "--steering") {
   if (done.stopReason !== "stop") fail(`resumed turn stopReason ${done.stopReason}: ${done.errorMessage ?? ""}`);
 
   ctx.messages.push(done);
-  // The withheld text goes out on its own turn now. (The fake replays
-  // the tool fixture per user frame, so this delivery turn pauses on a
-  // fresh tool call — toolUse IS the proof the text was sent.)
-  const delivered = await turnOf(cfg, model, ctx);
-  if (delivered.stopReason !== "toolUse") fail(`steering delivery turn stopReason ${delivered.stopReason}: ${delivered.errorMessage ?? ""}`);
+  // The steer was consumed by the paused turn: nothing is left to send.
+  const spent = await turnOf(cfg, model, ctx);
+  if (spent.stopReason !== "error" || !(spent.errorMessage ?? "").includes("nothing new")) {
+    fail(`steer resurfaced after delivery: ${spent.stopReason} ${spent.errorMessage ?? ""}`);
+  }
   console.log("pi_smoke steering: OK");
   process.exit(0);
 }
@@ -939,20 +939,36 @@ runStubPhase("--refused", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "refused
   if (count(trace, /reopening session/g) !== 0) fail("interrupt phase reopened — an interrupt must not cost the session");
 }
 {
-  const { trace } = runStubPhase("--steering");
-  // Two withholds: the steering-only refusal filters it first, then
-  // the completion turn withholds it from the resumed flight.
-  if (count(trace, /withheld 1 steering message\(s\)/g) !== 2) {
-    fail(`steering phase did not withhold the in-flight text twice:\n${trace.slice(-600)}`);
+  const { trace, wire } = runStubPhase("--steering");
+  // Held once (the steering-only refusal), then steered into the
+  // paused turn alongside the completion.
+  if (count(trace, /held 1 steering message\(s\)/g) !== 1) {
+    fail(`steering phase did not hold the text-only call:\n${trace.slice(-600)}`);
   }
-  if (count(trace, /turn sent:/g) !== 2) fail("steering phase: want exactly 2 sent turns (opening + delivery)");
+  if (count(trace, /steered 1 message\(s\) into the paused turn/g) !== 1) fail("steering phase did not steer the text with the completion");
+  if (count(trace, /turn sent:/g) !== 1) fail("steering phase: want exactly 1 sent turn (the opening)");
   if (count(trace, /turn resumed:/g) !== 1) fail("steering phase: want exactly 1 resumed turn");
-  if (count(trace, /reopening session/g) !== 0) fail("steering phase reopened — withheld steering must not restart");
+  if (count(trace, /reopening session/g) !== 0) fail("steering phase reopened — steering must not restart");
+  // On the wire: the steer frame precedes the tools/call response it rides with.
+  const steerAt = wire.findIndex((o) => o.type === "user" && JSON.stringify(o.message?.content).includes("actually, wait"));
+  const resultAt = wire.findIndex((o) => o.type === "control_response" && JSON.stringify(o).includes("mcp_response") && JSON.stringify(o).includes('"5"'));
+  if (steerAt < 0 || resultAt < 0 || steerAt > resultAt) fail(`steering phase wire order: steer at ${steerAt}, result at ${resultAt}`);
+}
+{
+  // A prompt the CLI would read as its own slash command is marked
+  // client_composed on the wire; an ordinary prompt is not.
+  const slash = piTurn("/help me, what does this do");
+  if (slash.r.status !== 0) fail(`slash-led pi turn exited ${slash.r.status}: ${slash.r.stderr?.slice(0, 300)}`);
+  const frame = slash.wire.find((o) => o.type === "user");
+  if (frame?.client_composed !== true) fail(`slash-led prompt went out without client_composed: ${JSON.stringify(frame).slice(0, 200)}`);
+  const plain = piTurn("hello there");
+  const plainFrame = plain.wire.find((o) => o.type === "user");
+  if (plainFrame && "client_composed" in plainFrame) fail("ordinary prompt carried client_composed");
 }
 {
   const { trace } = runStubPhase("--abort-during-tool");
   if (count(trace, /resumed 1 tool call\(s\)/g) !== 1) fail("abort-during-tool phase did not resume the parked call");
-  if (count(trace, /withheld 1 steering message\(s\)/g) !== 1) fail("abort-during-tool phase did not withhold the prompt from the resumed flight");
+  if (count(trace, /steered 1 message\(s\) into the paused turn/g) !== 1) fail("abort-during-tool phase did not steer the prompt into the resumed flight");
   if (count(trace, /reopening session/g) !== 0 || count(trace, /fresh start:/g) !== 0) {
     fail(`abort-during-tool phase restarted — Pi's error-stop reply read as foreign history:\n${trace.slice(-600)}`);
   }

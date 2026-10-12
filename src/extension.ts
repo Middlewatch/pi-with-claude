@@ -560,11 +560,16 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
           takeFreshStart("assistant history this session never produced was inserted");
         }
       } else if (s.inFlight) {
-        // While a model turn is paused on tool calls, only completions
-        // may go down; steering text is withheld and — being absent
-        // from the mirror — resurfaces as fresh suffix next call.
-        sendable = fresh.filter((m) => !isUserContent(m));
-        if (sendable.length < fresh.length) debug("withheld", fresh.length - sendable.length, "steering message(s)");
+        // While a model turn is paused on tool calls, completions resolve
+        // the parked handlers, and user content beside them rides down
+        // as a queued message the CLI attaches to the request that
+        // carries the results (characterized 2026-10-12 against 2.1.292,
+        // events.md §Queued user frames): a Pi steer reaches the model
+        // on the very next request. Text with no completion to ride has
+        // nothing to resume and is held: absent from the mirror, it
+        // resurfaces as fresh suffix next call.
+        sendable = fresh.some(hasToolResult) ? fresh : [];
+        if (sendable.length < fresh.length) debug("held", fresh.length - sendable.length, "steering message(s)");
       } else {
         sendable = fresh;
         if (sendable.some(hasToolResult)) {
@@ -591,6 +596,14 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
           s = swapSession();
           takeFreshStart("a tool result arrived for a call this session never made");
         } else {
+          // The steer goes down before the results it rides with: the
+          // CLI reads stdin in order, so the queued message is registered
+          // before the result it is attached to is processed.
+          const steer = userContentOf(sendable.filter(isUserContent));
+          if (steer.length > 0) {
+            s.bridge.pushUser(steer);
+            debug("steered", sendable.filter(isUserContent).length, "message(s) into the paused turn");
+          }
           for (const c of completions) {
             const entry = s.parkedById.get(c.call_id)!;
             s.parkedById.delete(c.call_id);
@@ -623,7 +636,7 @@ function streamClaude(p: Provider, model: Json, context: Json, options?: Json) {
         if (s.inFlight) {
           throw new Error(
             "pi-with-claude: a tool call is in flight, so only its results can go down now. The " +
-              "text is held and goes out with the next ordinary turn.",
+              "text is held and goes out with those results.",
           );
         }
         throw new Error("pi-with-claude: nothing new to run in this turn");

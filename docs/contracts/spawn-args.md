@@ -106,3 +106,13 @@ is nothing for the CLI's permission layer to do.
 ```
 
 Observed accepted verbatim in both legs.
+
+When any text block starts with `/` (after leading whitespace) the frame
+also carries `"client_composed": true`. Characterized 2026-10-12 against
+2.1.292: without it, a frame whose text began `/help ...` was answered
+by the CLI itself (`/help isn't available in this environment.`, a
+normal `success` result the model never saw); with it the model
+answered. A path-like `/tmp/notes.md ...` reached the model either way.
+Pi has already run its own commands, so whatever reaches the bridge is
+meant for the model. Evidence: `.local/evidence/2026-10-12-steering-probe/`
+(`slash-*.jsonl`).
