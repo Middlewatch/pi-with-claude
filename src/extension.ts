@@ -920,7 +920,10 @@ export default function (pi: ExtensionAPI) {
     // claude-opus-5-5 (.local/evidence/2026-09-23-repin-2.1.281/windows.txt),
     // and against 2.1.292 on 2026-10-06, where the sonnet alias began
     // resolving to claude-sonnet-5-5
-    // (.local/evidence/2026-10-06-repin-2.1.292/windows.txt). The
+    // (.local/evidence/2026-10-06-repin-2.1.292/windows.txt). Re-measured
+    // against 2.1.296 on 2026-10-12, where the haiku alias began
+    // resolving to claude-haiku-5-5 and its window moved 200000 → 1000000
+    // (.local/evidence/2026-10-12-repin-2.1.296/windows.txt). The
     // CLI is what actually compacts, so its number is the one Pi's
     // gauge must agree with. Overstating is the dangerous direction:
     // too large a number means compaction never fires and a long
@@ -928,7 +931,7 @@ export default function (pi: ExtensionAPI) {
     // 2.1.226 and 2.1.252; change any of these only against a fresh
     // measurement.
     models: [
-      { id: "haiku", name: "Claude Haiku via pi-with-claude", contextWindow: 200000 },
+      { id: "haiku", name: "Claude Haiku via pi-with-claude", contextWindow: 1000000 },
       { id: "sonnet", name: "Claude Sonnet via pi-with-claude", contextWindow: 1000000 },
       { id: "opus", name: "Claude Opus via pi-with-claude", contextWindow: 1000000 },
       { id: "fable", name: "Claude Fable via pi-with-claude", contextWindow: 1000000 },

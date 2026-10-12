@@ -1,17 +1,19 @@
 # Event stream: frozen wire contract
 
-**Pinned to:** `claude` 2.1.292, re-characterized 2026-10-06 through the
+**Pinned to:** `claude` 2.1.296, re-characterized 2026-10-12 through the
 native bridge with zero drift from the earlier pins: identical init
 shape, stream_event families, result subtypes, MCP `_meta` stamping,
 interrupt receipt, and cumulative-cost semantics. Additive, read by
-nothing: four more `capabilities` (`interrupt_send_now_v1`,
-`sdk_mcp_tools_list_changed`, `sdk_mcp_manifests`, `ui_surface_v1`),
-`thinking_duration_ms` beside the assistant `message`,
-`result.safety_stops`, `result.usage.fallback_credit` (null), and
-`thinking_display` on `stream_event` frames. The `sonnet` alias now
-resolves to `claude-sonnet-5-5` (`claude-sonnet-5` at 2.1.281); `opus`
-still resolves to `claude-opus-5-5` and `fable` to `claude-fable-5-1`,
-and the context windows of all four aliases are unchanged. A 40-tool
+nothing: one more capability (`request_marker_lists_v1`), a new
+`system` frame with subtype `thinking_tokens` (`estimated_tokens` and
+`estimated_tokens_delta`, a running thinking-progress count the CLI
+streams ahead of the reply; it carries no content and I4 passes it
+through), `thinking_display` on `assistant` frames, and
+`api_message_id` on `stream_event` frames. The `haiku` alias now
+resolves to `claude-haiku-5-5` with a 1,000,000-token window
+(`claude-haiku-4-5-20251001` at 200,000 through 2.1.292); `sonnet`
+still resolves to `claude-sonnet-5-5`, `opus` to `claude-opus-5-5`, and
+`fable` to `claude-fable-5-1`, all at 1,000,000. A 40-tool
 session listed every hosted tool in init (I6), so the CLI's tool-search
 deferral does not reach `sdk` servers. An opus probe at 2.1.281 with a
 ~20k-token prefix showed `cache_read_input_tokens` covering the prior
@@ -41,9 +43,16 @@ capabilities `mcp_read_resource_v1` and `mcp_tool_ui_meta_v1`, init
 fields `per_turn_effort_active` and `view_mode`, and
 `input_transformations` on the assistant `message`; `opus` began
 resolving to `claude-opus-5-5`. Re-pinned 2026-10-06 to 2.1.292: zero
-drift, four additive capabilities and four additive keys (header above);
-`sonnet` began resolving to `claude-sonnet-5-5`. Only a ratified re-pin
-moves this file.
+drift, four additive capabilities (`interrupt_send_now_v1`,
+`sdk_mcp_tools_list_changed`, `sdk_mcp_manifests`, `ui_surface_v1`) and
+four additive keys (`thinking_duration_ms` beside the assistant
+`message`, `result.safety_stops`, `result.usage.fallback_credit`,
+`thinking_display` on `stream_event`); `sonnet` began resolving to
+`claude-sonnet-5-5`. Re-pinned 2026-10-12 to 2.1.296: zero drift, one
+additive capability, the `thinking_tokens` system frame, and two
+additive keys (header above); `haiku` began resolving to
+`claude-haiku-5-5` and its window grew from 200,000 to 1,000,000. Only a
+ratified re-pin moves this file.
 
 ## The tolerance rule (I4)
 
