@@ -20,7 +20,11 @@ Select provider `pi-with-claude` and model `haiku`, `sonnet`, `opus`, or
 logged in, since the extension never sees a credential. Pi's thinking level
 drives `--effort`, with `off` hidden because the CLI cannot disable reasoning.
 Changing model, effort, tool set, or account reopens the session at the cost of
-a fresh model context.
+a fresh model context. `/new`, `/resume`, `/fork`, and quitting close the
+child; `/reload` keeps it, since the Pi session and its history survive the
+reload, and the next turn continues where it was. A reply Pi records as
+failed (an error, or an Esc that landed while a tool ran) is skipped by the
+history diff rather than taken as a reason to restart.
 
 ### Accounts
 

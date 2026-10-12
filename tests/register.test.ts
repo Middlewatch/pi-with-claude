@@ -21,8 +21,8 @@ function captured() {
   return { provider, events };
 }
 
-test("registers a session_shutdown handler for the child", () => {
-  assert.deepEqual(captured().events, ["session_shutdown"]);
+test("registers the session lifecycle handlers for the child", () => {
+  assert.deepEqual(captured().events, ["session_shutdown", "session_start"]);
 });
 
 test("registers the pi-with-claude provider with the settled roster", () => {

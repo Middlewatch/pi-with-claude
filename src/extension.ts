@@ -187,6 +187,49 @@ type Provider = { session: Session | null; account: string | null | undefined };
 const currentAccount = async (p: Provider): Promise<string | null> =>
   p.account === undefined ? (p.account = await selected()) : p.account;
 
+// A `/reload` replaces the extension runtime (a fresh module instance
+// and a fresh Provider) while the Pi session and its history stay. The
+// live child is parked on globalThis across that gap, keyed by a
+// versioned symbol so an old and a new module copy meet at the same
+// slot, and the new runtime's session_start adopts it. A parked child
+// nobody adopts within the grace is closed, so a reload that never
+// comes back cannot leak a process (I8). Only an idle, live session is
+// parked; anything else closes as before.
+const PARKED = Symbol.for("pi-with-claude.parked-session.v1");
+const PARK_GRACE_MS = 30_000;
+type Parked = { session: Session; timer: ReturnType<typeof setTimeout> };
+const parkingSlot = globalThis as unknown as { [PARKED]?: Parked };
+
+function parkSession(session: Session | null) {
+  adoptSession()?.close(); // one slot: a stale occupant is closed first
+  if (!session) return;
+  if (session.dead() || session.busy) {
+    session.close();
+    return;
+  }
+  const timer = setTimeout(() => {
+    if (parkingSlot[PARKED]?.session === session) {
+      delete parkingSlot[PARKED];
+      session.close();
+    }
+  }, PARK_GRACE_MS);
+  timer.unref?.();
+  parkingSlot[PARKED] = { session, timer };
+  debug("reload: session parked");
+}
+
+function adoptSession(): Session | null {
+  const parked = parkingSlot[PARKED];
+  if (!parked) return null;
+  clearTimeout(parked.timer);
+  delete parkingSlot[PARKED];
+  if (parked.session.dead()) {
+    parked.session.close();
+    return null;
+  }
+  return parked.session;
+}
+
 // ---------------------------------------------------------------------
 // Wire translation at the claude boundary.
 
@@ -900,10 +943,21 @@ export default function (pi: ExtensionAPI) {
   });
 
   // The child is session-scoped: /new, /resume, /fork, and exit all
-  // pass here, and the next turn opens fresh from Pi's new history.
-  pi.on("session_shutdown", async () => {
-    p.session?.close();
+  // pass here, and the next turn opens fresh from Pi's new history. A
+  // reload keeps the Pi session, so its child is parked for the new
+  // runtime instead (parkSession).
+  pi.on("session_shutdown", async (ev: Json) => {
+    if (ev?.reason === "reload") parkSession(p.session);
+    else p.session?.close();
     p.session = null;
+  });
+  pi.on("session_start", async (ev: Json) => {
+    if (ev?.reason !== "reload") return;
+    const adopted = adoptSession();
+    if (!adopted) return;
+    p.session?.close();
+    p.session = adopted;
+    debug("reload: session adopted,", adopted.noted.length, "noted");
   });
 
   pi.registerCommand("pi-with-claude", {

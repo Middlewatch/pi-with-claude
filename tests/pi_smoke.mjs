@@ -54,17 +54,21 @@ async function loadProvider() {
   const { default: register } = await import(new URL("../src/index.ts", import.meta.url));
   let captured = null;
   const commands = new Map();
+  const handlers = new Map();
   register({
     registerProvider(id, config) {
       captured = { id, config };
     },
-    on() {},
+    on(event, handler) {
+      handlers.set(event, handler);
+    },
     registerCommand(name, config) {
       commands.set(name, config);
     },
   });
   if (!captured) fail("extension did not call registerProvider");
   captured.commands = commands;
+  captured.handlers = handlers;
   return captured;
 }
 
@@ -364,6 +368,28 @@ if (phase === "--abort-during-tool") {
   const resumed = await turnOf(cfg, model, ctx);
   if (resumed.stopReason !== "stop") fail(`abort-during-tool resumed turn stopReason ${resumed.stopReason}: ${resumed.errorMessage ?? ""}`);
   console.log("pi_smoke abort-during-tool: OK");
+  process.exit(0);
+}
+
+if (phase === "--reload") {
+  // /reload: Pi fires session_shutdown(reload) on the old runtime and
+  // session_start(reload) on the new one, with the same history. The
+  // child must cross that gap: one spawn, and the second turn sends
+  // only the new prompt. A quit still closes it.
+  const old = await loadProvider();
+  const model = { id: old.config.models[0].id, api: "pi-with-claude", provider: old.id };
+  const ctx = { systemPrompt: "You are a test.", messages: [{ role: "user", content: "hello", timestamp: Date.now() }] };
+  const first = await turnOf(old.config, model, ctx);
+  if (first.stopReason !== "stop") fail(`reload phase first turn stopReason ${first.stopReason}: ${first.errorMessage ?? ""}`);
+  await old.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "reload" });
+
+  const fresh = await loadProvider(); // the new runtime: a new Provider over the same module
+  await fresh.handlers.get("session_start")({ type: "session_start", reason: "reload" });
+  ctx.messages.push(first, { role: "user", content: "still there?", timestamp: Date.now() });
+  const second = await turnOf(fresh.config, model, ctx);
+  if (second.stopReason !== "stop") fail(`reload phase second turn stopReason ${second.stopReason}: ${second.errorMessage ?? ""}`);
+  await fresh.handlers.get("session_shutdown")({ type: "session_shutdown", reason: "quit" });
+  console.log("pi_smoke reload: OK");
   process.exit(0);
 }
 
@@ -930,6 +956,14 @@ runStubPhase("--refused", { FAKE_CLAUDE_FIXTURE: join(root, "fixtures", "refused
   if (count(trace, /reopening session/g) !== 0 || count(trace, /fresh start:/g) !== 0) {
     fail(`abort-during-tool phase restarted — Pi's error-stop reply read as foreign history:\n${trace.slice(-600)}`);
   }
+}
+{
+  const { trace, wire } = runStubPhase("--reload");
+  if (count(trace, /opening session:/g) !== 1) fail(`reload phase opened ${count(trace, /opening session:/g)} session(s), want 1`);
+  if (count(trace, /reload: session adopted/g) !== 1) fail("reload phase: the new runtime did not adopt the parked child");
+  if (!/turn sent: 2 noted \+ 1 new/.test(trace)) fail(`reload phase second turn did not ride the adopted session:\n${trace.slice(-600)}`);
+  if (count(trace, /fresh start:/g) !== 0) fail("reload phase fresh-started — history was re-read as resumed");
+  if (wire.filter((o) => o.fake_argv).length !== 1) fail("reload phase spawned more than one fake claude");
 }
 {
   const { trace, wire } = runStubPhase("--swap");
